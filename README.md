@@ -7,6 +7,26 @@ Use the synthetic data for product development, testing, demos, performance eval
 
 Disclaimer: Note that this data should not be used for actual machine learning algorithm research or to draw conclusions about real-world user behaviour/analysis.
 
+
+## Project Structure
+
+```
+foodata/
+│
+├── cmd/foodata/          # Main application entry point
+├── internal/             # Internal application code
+│   ├── config/           # Configuration handling
+│   ├── model/            # Data models
+│   ├── simulator/        # Core simulation logic
+│   └── output/           # Output formatting (JSON, CSV, Kafka)
+├── pkg/                  # Public libraries
+├── examples/             # Example configuration files
+├── go.mod
+├── go.sum
+├── README.md
+└── LICENSE
+```
+
 Statistical Model
 =================
 
@@ -36,22 +56,41 @@ The simulation takes into account various factors when generating events:
 * Restaurant popularity and ratings influence order frequency
 * Delivery times are affected by simulated traffic conditions and distance
 
-Config File
-===========
-The config file is a JSON file with key-value pairs. Here's an explanation of some key parameters:
+## Configuration
 
-* `seed` For the pseudo-random number generator
-* `start_date` Start date for data generation (ISO8601 format)
-* `end_date` End date for data generation (ISO8601 format)
-* `n_users` Initial number of users
-* `n_restaurants` Number of restaurants
-* `n_delivery_partners` Number of delivery partners
-* `growth_rate` Annual growth rate for users
-* `order_frequency` Average number of orders per user per month
-* `peak_hour_factor` Factor to increase order frequency during peak hours
-* `weekend_factor` Factor to adjust order frequency on weekends
+The config file is a JSON file with key-value pairs. Here's an explanation of key parameters:
 
-The config file also specifies distributions for various parameters such as order value, delivery time, and user ratings.
+* `seed`: Seed for the pseudo-random number generator
+* `start_date`: Start date for data generation (ISO8601 format)
+* `end_date`: End date for data generation (ISO8601 format)
+* `initial_users`: Initial number of users
+* `initial_restaurants`: Number of restaurants
+* `initial_partners`: Number of delivery partners
+* `user_growth_rate`: Annual growth rate for users
+* `partner_growth_rate`: Annual growth rate for delivery partners
+* `order_frequency`: Average number of orders per user per month
+* `peak_hour_factor`: Factor to increase order frequency during peak hours
+* `weekend_factor`: Factor to adjust order frequency on weekends
+* `traffic_variability`: Factor to add randomness to traffic conditions
+
+Example config file:
+
+```json
+{
+  "seed": 12345,
+  "start_date": "2023-01-01T00:00:00Z",
+  "end_date": "2023-02-01T00:00:00Z",
+  "initial_users": 10000,
+  "initial_restaurants": 500,
+  "initial_partners": 1000,
+  "user_growth_rate": 0.05,
+  "partner_growth_rate": 0.03,
+  "order_frequency": 2.5,
+  "peak_hour_factor": 1.5,
+  "weekend_factor": 1.2,
+  "traffic_variability": 0.2
+}
+```
 
 Usage
 =====
@@ -80,9 +119,37 @@ Example for generating about 1 million events (10,000 users for a month, growing
 
     $ bin/foodata -c "examples/config.json" -s "2023-01-01" -e "2023-02-01" -n 10000 -g 0.05 -o data/synthetic.json
 
+
+## Generated Data
+
+The simulator generates data for:
+
+1. Users: ID, name, join date, location, preferences, order frequency
+2. Restaurants: ID, name, location, cuisines, rating, preparation time, pickup efficiency
+3. Menu Items: ID, restaurant ID, name, description, price, preparation time, category
+4. Delivery Partners: ID, name, join date, rating, current location, status, experience
+5. Orders: ID, user ID, restaurant ID, delivery partner ID, items (list of menu item IDs), total amount, timestamps, status
+6. Traffic Conditions: Time, location, density
+
+## Using the Data for GNN Models
+
+The generated data can be used to train Graph Neural Network (GNN) models for various tasks in the food delivery ecosystem:
+
+1. Optimal restaurant rankings for delivery partners
+2. Predicting delivery partner utilization in different areas and times
+3. Estimating preparation and delivery times
+4. Improving overall efficiency of the three-sided marketplace
+
+To use the data for GNN models:
+
+1. Generate a dataset using foodatasim
+2. Convert the output into a graph representation, where nodes are users, restaurants, and delivery partners, and edges represent interactions (orders, deliveries)
+3. Use the graph data to train and evaluate GNN models for your specific task
+
+
 Building large datasets in parallel
 ===================================
-For generating large datasets quickly, you can run multiple instances of Foodatasim simultaneously:
+For generating large datasets quickly, you can run multiple instances of foodatasim simultaneously:
 
 * Use different random seeds for each instance
 * Assign non-overlapping user ID ranges to each instance
