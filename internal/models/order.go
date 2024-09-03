@@ -11,7 +11,9 @@ type Order struct {
 	TotalAmount           float64   `json:"total_amount"`
 	DeliveryCost          float64   `json:"delivery_cost"`
 	OrderPlacedAt         time.Time `json:"order_placed_at"`
+	PrepStartTime         time.Time `json:"prep_start_time"`
 	EstimatedDeliveryTime time.Time `json:"estimated_delivery_time"`
+	PickupTime            time.Time `json:"pickup_time"`
 	ActualDeliveryTime    time.Time `json:"actual_delivery_time"`
 	Status                string    `json:"status"`         // e.g., "placed", "preparing", "in_transit", "delivered", "cancelled"
 	PaymentMethod         string    `json:"payment_method"` // e.g., "card", "cash", "wallet"

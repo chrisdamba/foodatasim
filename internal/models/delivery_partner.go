@@ -7,8 +7,9 @@ type DeliveryPartner struct {
 	Name            string    `json:"name"`
 	JoinDate        time.Time `json:"join_date"`
 	Rating          float64   `json:"rating"`
-	CurrentLocation Location  `json:"current_location"`
-	Status          string    `json:"status"`     // "available", "en_route_to_pickup", "en_route_to_delivery"
+	TotalRatings    float64   `json:"total_ratings"`
 	Experience      float64   `json:"experience"` // Experience score
 	AvgSpeed        float64   `json:"avg_speed"`
+	CurrentLocation Location  `json:"current_location"`
+	Status          string    `json:"status"` // "available", "en_route_to_pickup", "en_route_to_delivery"
 }
