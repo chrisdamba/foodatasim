@@ -9,11 +9,12 @@ const (
 	OrderStatusDelivered = "delivered"
 	OrderStatusCancelled = "cancelled"
 
-	PartnerStatusAvailable     = "available"
-	PartnerStatusAssigned      = "assigned"
-	PartnerStatusEnRoutePickup = "en_route_to_pickup"
-	PartnerStatusDelivering    = "delivering"
-	PartnerStatusOffline       = "offline"
+	PartnerStatusAvailable       = "available"
+	PartnerStatusAssigned        = "assigned"
+	PartnerStatusEnRoutePickup   = "en_route_to_pickup"
+	PartnerStatusEnRouteDelivery = "en_route_to_delivery"
+	PartnerStatusDelivering      = "delivering"
+	PartnerStatusOffline         = "offline"
 
 	RestaurantStatusOpen   = "open"
 	RestaurantStatusClosed = "closed"

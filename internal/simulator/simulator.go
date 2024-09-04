@@ -110,11 +110,8 @@ func (c *ConsoleOutput) WriteMessage(topic string, msg []byte) error {
 		return fmt.Errorf("failed to write to stdout: %w", err)
 	}
 
-	// Ensure the output is immediately visible
-	err = os.Stdout.Sync()
-	if err != nil {
-		return fmt.Errorf("failed to sync stdout: %w", err)
-	}
+	// Try to sync, but don't return an error if it fails
+	_ = os.Stdout.Sync()
 
 	return nil
 }
@@ -168,6 +165,8 @@ func (s *Simulator) processEvent(event *models.Event) {
 		s.handlePrepareOrder(event.Data.(*models.Order))
 	case models.EventOrderReady:
 		s.handleOrderReady(event.Data.(*models.Order))
+	case models.EventAssignDeliveryPartner:
+		s.handleAssignDeliveryPartner(event)
 
 	}
 }
@@ -360,6 +359,43 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		}
 		topic = "order_ready_events"
 
+	case models.EventAssignDeliveryPartner:
+		order := event.Data.(*models.Order)
+		baseEvent.RestaurantID = order.RestaurantID
+		baseEvent.DeliveryID = order.DeliveryPartnerID
+
+		eventData = struct {
+			BaseEvent
+			OrderID             string `json:"orderId"`
+			Status              string `json:"status"`
+			EstimatedPickupTime int64  `json:"estimated_pickup_time"`
+		}{
+			BaseEvent:           baseEvent,
+			OrderID:             order.ID,
+			Status:              order.Status,
+			EstimatedPickupTime: order.EstimatedPickupTime.Unix(),
+		}
+		topic = "delivery_partner_assignment_events"
+
+	case models.EventPickUpOrder:
+		order := event.Data.(*models.Order)
+		baseEvent.RestaurantID = order.RestaurantID
+		baseEvent.DeliveryID = order.DeliveryPartnerID
+
+		eventData = struct {
+			BaseEvent
+			OrderID               string `json:"orderId"`
+			Status                string `json:"status"`
+			PickupTime            int64  `json:"pickup_time"`
+			EstimatedDeliveryTime int64  `json:"estimated_delivery_time"`
+		}{
+			BaseEvent:             baseEvent,
+			OrderID:               order.ID,
+			Status:                order.Status,
+			PickupTime:            order.PickupTime.Unix(),
+			EstimatedDeliveryTime: order.EstimatedDeliveryTime.Unix(),
+		}
+		topic = "order_pickup_events"
 	// Add cases for other event types as needed, such as Delivery, Review, etc.
 	default:
 		return models.EventMessage{}, fmt.Errorf("unknown event type: %v", event.Type)
@@ -480,4 +516,123 @@ func (s *Simulator) handleOrderReady(order *models.Order) {
 
 	// Optionally, update restaurant metrics
 	s.updateRestaurantMetrics(restaurant)
+}
+
+func (s *Simulator) handleAssignDeliveryPartner(event *models.Event) {
+	order := event.Data.(*models.Order)
+
+	// check if the order has already been assigned a delivery partner
+	if order.DeliveryPartnerID != "" {
+		log.Printf("Order %s already has a delivery partner assigned", order.ID)
+		return
+	}
+
+	restaurant := s.getRestaurant(order.RestaurantID)
+	if restaurant == nil {
+		log.Printf("Error: Restaurant not found for order %s", order.ID)
+		return
+	}
+
+	availablePartners := s.getAvailablePartnersNear(restaurant.Location)
+
+	if len(availablePartners) == 0 {
+		// if no partners are available, schedule a retry
+		retryTime := s.CurrentTime.Add(2 * time.Minute)
+		s.EventQueue.Enqueue(&models.Event{
+			Time: retryTime,
+			Type: models.EventAssignDeliveryPartner,
+			Data: order,
+		})
+		log.Printf("No available delivery partners for order %s, scheduling retry at %s",
+			order.ID, retryTime.Format(time.RFC3339))
+		return
+	}
+
+	// Select the best partner (for now, just select randomly)
+	selectedPartner := availablePartners[s.Rng.Intn(len(availablePartners))]
+
+	// Assign the selected partner to the order
+	order.DeliveryPartnerID = selectedPartner.ID
+	selectedPartner.Status = models.PartnerStatusEnRoutePickup
+
+	// Update the partner's current location and status
+	partnerIndex := s.getPartnerIndex(selectedPartner.ID)
+	if partnerIndex != -1 {
+		s.DeliveryPartners[partnerIndex] = selectedPartner
+	}
+
+	// Calculate estimated pickup time
+	estimatedPickupTime := s.estimateArrivalTime(selectedPartner.CurrentLocation, restaurant.Location)
+	order.EstimatedPickupTime = estimatedPickupTime
+
+	// Schedule the pickup event
+	s.EventQueue.Enqueue(&models.Event{
+		Time: estimatedPickupTime,
+		Type: models.EventPickUpOrder,
+		Data: order,
+	})
+
+	log.Printf("Assigned delivery partner %s to order %s. Estimated pickup time: %s",
+		selectedPartner.ID, order.ID, estimatedPickupTime.Format(time.RFC3339))
+
+	// Notify the delivery partner (in a real system, this would send a notification)
+	s.notifyDeliveryPartner(selectedPartner, order)
+}
+
+func (s *Simulator) handlePickUpOrder(event *models.Event) {
+	order := event.Data.(*models.Order)
+
+	// verify the order status
+	if order.Status != models.OrderStatusReady {
+		log.Printf("Error: Order %s is not ready for pickup. Current status: %s", order.ID, order.Status)
+		return
+	}
+
+	// get the assigned delivery partner
+	partner := s.getDeliveryPartner(order.DeliveryPartnerID)
+	if partner == nil {
+		log.Printf("Error: Delivery partner not found for order %s", order.ID)
+		return
+	}
+
+	// check if the delivery partner is at the restaurant
+	restaurant := s.getRestaurant(order.RestaurantID)
+	if restaurant == nil {
+		log.Printf("Error: Restaurant not found for order %s", order.ID)
+		return
+	}
+
+	if !s.isAtLocation(partner.CurrentLocation, restaurant.Location) {
+		// if the partner is not at the restaurant, reschedule the pickup
+		nextAttempt := s.CurrentTime.Add(2 * time.Minute)
+		s.EventQueue.Enqueue(&models.Event{
+			Time: nextAttempt,
+			Type: models.EventPickUpOrder,
+			Data: order,
+		})
+		log.Printf("Delivery partner not at restaurant. Rescheduling pickup for order %s at %s",
+			order.ID, nextAttempt.Format(time.RFC3339))
+		return
+	}
+
+	// Update order status
+	order.Status = models.OrderStatusPickedUp
+	order.PickupTime = s.CurrentTime
+
+	// Update delivery partner status
+	partner.Status = models.PartnerStatusEnRouteDelivery
+
+	// Estimate delivery time
+	estimatedDeliveryTime := s.estimateDeliveryTime(partner, order)
+	order.EstimatedDeliveryTime = estimatedDeliveryTime
+
+	// Schedule delivery event
+	s.EventQueue.Enqueue(&models.Event{
+		Time: estimatedDeliveryTime,
+		Type: models.EventDeliverOrder,
+		Data: order,
+	})
+
+	log.Printf("Order %s picked up by partner %s. Estimated delivery time: %s",
+		order.ID, partner.ID, estimatedDeliveryTime.Format(time.RFC3339))
 }

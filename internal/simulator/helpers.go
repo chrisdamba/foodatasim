@@ -556,6 +556,41 @@ func (s *Simulator) estimateArrivalTime(from, to models.Location) time.Time {
 	return s.CurrentTime.Add(time.Duration(actualTravelTime * float64(time.Hour)))
 }
 
+func (s *Simulator) estimateDeliveryTime(partner *models.DeliveryPartner, order *models.Order) time.Time {
+	user := s.getUser(order.CustomerID)
+	if user == nil {
+		log.Printf("Warning: User not found for order %s. Using default delivery estimate.", order.ID)
+		return s.CurrentTime.Add(30 * time.Minute)
+	}
+
+	restaurant := s.getRestaurant(order.RestaurantID)
+	if restaurant == nil {
+		log.Printf("Warning: Restaurant not found for order %s. Using default delivery estimate.", order.ID)
+		return s.CurrentTime.Add(30 * time.Minute)
+	}
+
+	// Estimate time from current location to restaurant (if not already there)
+	timeToRestaurant := time.Duration(0)
+	if !s.isAtLocation(partner.CurrentLocation, restaurant.Location) {
+		timeToRestaurant = s.estimateArrivalTime(partner.CurrentLocation, restaurant.Location).Sub(s.CurrentTime)
+	}
+
+	// Estimate time from restaurant to user
+	timeToUser := s.estimateArrivalTime(restaurant.Location, user.Location).Sub(s.CurrentTime)
+
+	// Add some buffer time for order handoff at restaurant and to customer, for finding parking space etc
+	bufferTime := 5 * time.Minute
+
+	// Calculate total estimated time
+	totalEstimatedTime := timeToRestaurant + timeToUser + bufferTime
+
+	// Add some overall variability to account for unforeseen circumstances
+	variability := 0.1 // 10% variability
+	adjustedTime := time.Duration(float64(totalEstimatedTime) * (1 + (s.Rng.Float64()*2-1)*variability))
+
+	return s.CurrentTime.Add(adjustedTime)
+}
+
 func (s *Simulator) isOrderDelivered(order models.Order) bool {
 	partner := s.getDeliveryPartner(order.DeliveryPartnerID)
 	user := s.getUser(order.CustomerID)

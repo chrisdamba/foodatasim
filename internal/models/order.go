@@ -12,6 +12,7 @@ type Order struct {
 	DeliveryCost          float64   `json:"delivery_cost"`
 	OrderPlacedAt         time.Time `json:"order_placed_at"`
 	PrepStartTime         time.Time `json:"prep_start_time"`
+	EstimatedPickupTime   time.Time `json:"estimated_pickup_time"`
 	EstimatedDeliveryTime time.Time `json:"estimated_delivery_time"`
 	PickupTime            time.Time `json:"pickup_time"`
 	ActualDeliveryTime    time.Time `json:"actual_delivery_time"`
