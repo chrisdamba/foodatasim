@@ -101,8 +101,22 @@ func (k *KafkaOutput) WriteMessage(topic string, msg []byte) error {
 }
 
 func (c *ConsoleOutput) WriteMessage(topic string, msg []byte) error {
-	_, err := os.Stdout.Write(msg)
-	return err
+	// Create a formatted string that includes the topic
+	output := fmt.Sprintf("[%s] %s\n", topic, string(msg))
+
+	// Write the formatted string to stdout
+	_, err := os.Stdout.Write([]byte(output))
+	if err != nil {
+		return fmt.Errorf("failed to write to stdout: %w", err)
+	}
+
+	// Ensure the output is immediately visible
+	err = os.Stdout.Sync()
+	if err != nil {
+		return fmt.Errorf("failed to sync stdout: %w", err)
+	}
+
+	return nil
 }
 
 func (s *Simulator) initializeData() {
@@ -287,8 +301,12 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 	switch event.Type {
 	case models.EventPlaceOrder:
 		user := event.Data.(*models.User)
-		order := event.Data.(*models.Order)
 		baseEvent.UserID = user.ID
+		// Create an order for this user
+		order, err := s.createAndAddOrder(user)
+		if err != nil {
+			return models.EventMessage{}, fmt.Errorf("failed to create order: %w", err)
+		}
 		baseEvent.RestaurantID = order.RestaurantID
 
 		eventData = struct {
@@ -363,12 +381,6 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 
 // Event handlers
 func (s *Simulator) handlePlaceOrder(user *models.User) {
-	_, err := s.createAndAddOrder(user)
-	if err != nil {
-		log.Printf("Error creating order for user %s: %v", user.ID, err)
-		return
-	}
-
 	// Schedule next order for this user
 	nextOrderTime := s.generateNextOrderTime(user)
 	s.EventQueue.Enqueue(&models.Event{

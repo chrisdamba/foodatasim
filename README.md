@@ -56,6 +56,7 @@ The simulation takes into account various factors when generating events:
 * Restaurant popularity and ratings influence order frequency
 * Delivery times are affected by simulated traffic conditions and distance
 
+
 ## Configuration
 
 The config file is a JSON file with key-value pairs. Here's an explanation of key parameters:
@@ -68,7 +69,7 @@ The config file is a JSON file with key-value pairs. Here's an explanation of ke
 * `initial_partners`: Number of delivery partners
 * `user_growth_rate`: Annual growth rate for users
 * `partner_growth_rate`: Annual growth rate for delivery partners
-* `order_frequency`: Average number of orders per user per month
+* `order_frequency`: Average number of orders per user per day
 * `peak_hour_factor`: Factor to increase order frequency during peak hours
 * `weekend_factor`: Factor to adjust order frequency on weekends
 * `traffic_variability`: Factor to add randomness to traffic conditions
@@ -77,18 +78,22 @@ Example config file:
 
 ```json
 {
-  "seed": 12345,
-  "start_date": "2023-01-01T00:00:00Z",
-  "end_date": "2023-02-01T00:00:00Z",
-  "initial_users": 10000,
-  "initial_restaurants": 500,
-  "initial_partners": 1000,
-  "user_growth_rate": 0.05,
-  "partner_growth_rate": 0.03,
-  "order_frequency": 2.5,
+  "seed": 42,
+  "start_date": "2024-06-01T00:00:00Z",
+  "end_date": "2024-07-01T00:00:00Z",
+  "initial_users": 1000,
+  "initial_restaurants": 100,
+  "initial_partners": 50,
+  "user_growth_rate": 0.01,
+  "partner_growth_rate": 0.02,
+  "order_frequency": 0.1,
   "peak_hour_factor": 1.5,
   "weekend_factor": 1.2,
-  "traffic_variability": 0.2
+  "traffic_variability": 0.2,
+  "kafka_enabled": false,
+  "kafka_broker_list": "localhost:9092",
+  "output_file_path": "",
+  "continuous": false
 }
 ```
 
@@ -97,28 +102,32 @@ Usage
 
 To build the executable, run:
 
-    $ go build -o bin/foodata
+    $ go build -o bin/foodatasim
 
 The program accepts several command-line options:
 
-    $ bin/foodata --help
-        -c, --config <arg>             config file
-        -o, --output <arg>             output file (default: stdout)
-        -f, --format <arg>             output format (json, csv, parquet)
-        -k, --kafka-topic <arg>        Kafka topic (if using Kafka output)
-        --kafka-broker-list <arg>      Kafka broker list
-        -s, --start-date <arg>         start date for data generation
-        -e, --end-date <arg>           end date for data generation
-        -n, --n-users <arg>            initial number of users
-        -g, --growth-rate <arg>        annual user growth rate
-        --seed <arg>                   random seed
-        --continuous                   run in continuous mode
-        --help                         show this help message
+    $ bin/foodatasim --help
+        --config string      config file (default is $HOME/.foodatasim.yaml)
+        --seed int           Random seed for simulation (default 42)
+        --start-date string  Start date for simulation (default "current date")
+        --end-date string    End date for simulation (default "current date + 1 month")
+        --initial-users int  Initial number of users (default 1000)
+        --initial-restaurants int  Initial number of restaurants (default 100)
+        --initial-partners int     Initial number of delivery partners (default 50)
+        --user-growth-rate float   Annual user growth rate (default 0.01)
+        --partner-growth-rate float  Annual partner growth rate (default 0.02)
+        --order-frequency float      Average order frequency per user per day (default 0.1)
+        --peak-hour-factor float     Factor for increased order frequency during peak hours (default 1.5)
+        --weekend-factor float       Factor for increased order frequency during weekends (default 1.2)
+        --traffic-variability float  Variability in traffic conditions (default 0.2)
+        --kafka-enabled              Enable Kafka output
+        --kafka-broker-list string   Kafka broker list (default "localhost:9092")
+        --output-file string         Output file path (if not using Kafka)
+        --continuous                 Run simulation in continuous mode
 
-Example for generating about 1 million events (10,000 users for a month, growing at 5% annually):
+Example for generating about 1 million events (1,000 users for a month, growing at 1% annually):
 
-    $ bin/foodata -c "examples/config.json" -s "2023-01-01" -e "2023-02-01" -n 10000 -g 0.05 -o data/synthetic.json
-
+    $ bin/foodatasim --config config.json --start-date "2023-06-01T00:00:00Z" --end-date "2023-07-01T00:00:00Z" --initial-users 1000 --user-growth-rate 0.01 --output-file data/synthetic.json
 
 ## Generated Data
 

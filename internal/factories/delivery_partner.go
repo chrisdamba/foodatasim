@@ -3,11 +3,19 @@ package factories
 import (
 	"github.com/chrisdamba/foodatasim/internal/models"
 	"github.com/lucsky/cuid"
+	"math"
 )
 
 type DeliveryPartnerFactory struct{}
 
 func (df *DeliveryPartnerFactory) CreateDeliveryPartner(config *models.Config) *models.DeliveryPartner {
+	// Calculate city bounds
+	latRange := config.UrbanRadius / 111.0 // Approx. conversion from km to degrees
+	lonRange := latRange / math.Cos(config.CityLat*math.Pi/180.0)
+
+	lat := fake.Float64(6, int(config.CityLat-latRange), int(config.CityLat+latRange))
+	lon := fake.Float64(6, int(config.CityLon-lonRange), int(config.CityLon+lonRange))
+
 	return &models.DeliveryPartner{
 		ID:           cuid.New(),
 		Name:         fake.Person().Name(),
@@ -17,8 +25,8 @@ func (df *DeliveryPartnerFactory) CreateDeliveryPartner(config *models.Config) *
 		Experience:   fake.Float64(2, 0, 100) / 100,
 		AvgSpeed:     fake.Float64(1, 20, 60),
 		CurrentLocation: models.Location{
-			Lat: fake.Float64(6, -90, 90),
-			Lon: fake.Float64(6, -180, 180),
+			Lat: lat,
+			Lon: lon,
 		},
 		Status: "available",
 	}

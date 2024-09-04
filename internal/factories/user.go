@@ -4,6 +4,7 @@ import (
 	"github.com/chrisdamba/foodatasim/internal/models"
 	"github.com/jaswdr/faker"
 	"github.com/lucsky/cuid"
+	"math"
 	"math/rand"
 )
 
@@ -12,13 +13,20 @@ var fake = faker.New()
 type UserFactory struct{}
 
 func (uf *UserFactory) CreateUser(config *models.Config) *models.User {
+	// Calculate city bounds
+	latRange := config.UrbanRadius / 111.0 // Approx. conversion from km to degrees
+	lonRange := latRange / math.Cos(config.CityLat*math.Pi/180.0)
+
+	lat := fake.Float64(6, int(config.CityLat-latRange), int(config.CityLat+latRange))
+	lon := fake.Float64(6, int(config.CityLon-lonRange), int(config.CityLon+lonRange))
+
 	return &models.User{
 		ID:       cuid.New(),
 		Name:     fake.Person().Name(),
 		JoinDate: fake.Time().TimeBetween(config.StartDate.AddDate(-1, 0, 0), config.StartDate),
 		Location: models.Location{
-			Lat: fake.Float64(6, -90, 90),
-			Lon: fake.Float64(6, -180, 180),
+			Lat: lat,
+			Lon: lon,
 		},
 		Preferences:         generateRandomPreferences(),
 		DietaryRestrictions: generateRandomDietaryRestrictions(),

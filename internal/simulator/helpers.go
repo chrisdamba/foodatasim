@@ -145,7 +145,7 @@ func (s *Simulator) selectRestaurant(user *models.User) *models.Restaurant {
 		for k := range s.Restaurants {
 			keys = append(keys, k)
 		}
-		return s.Restaurants[keys[rand.Intn(len(keys))]]
+		return s.Restaurants[keys[s.Rng.Intn(len(keys))]]
 	}
 
 	// Calculate scores for each nearby restaurant
@@ -172,7 +172,7 @@ func (s *Simulator) selectRestaurant(user *models.User) *models.Restaurant {
 		totalScore += rs.score
 	}
 
-	randomValue := rand.Float64() * totalScore
+	randomValue := s.Rng.Float64() * totalScore
 	cumulativeScore := 0.0
 
 	for _, rs := range scoredRestaurants {
@@ -261,7 +261,7 @@ func (s *Simulator) updateTrafficConditions() {
 
 func (s *Simulator) generateTrafficDensity(t time.Time) float64 {
 	baseTraffic := 0.5 + 0.5*math.Sin(float64(t.Hour())/24*2*math.Pi)
-	randomFactor := 1 + (rand.Float64()-0.5)*s.Config.TrafficVariability
+	randomFactor := 1 + (s.Rng.Float64()-0.5)*s.Config.TrafficVariability
 	return baseTraffic * randomFactor
 }
 
@@ -271,6 +271,11 @@ func (s *Simulator) generateOrders() {
 			order := s.createOrder(user)
 			s.assignDeliveryPartner(order)
 			s.Orders = append(s.Orders, *order)
+			s.EventQueue.Enqueue(&models.Event{
+				Time: s.CurrentTime,
+				Type: models.EventPlaceOrder,
+				Data: user,
+			})
 		}
 	}
 }
@@ -293,7 +298,7 @@ func (s *Simulator) createOrder(user *models.User) *models.Order {
 		Items:         items,
 		TotalAmount:   totalAmount,
 		OrderPlacedAt: s.CurrentTime,
-		PrepStartTime: s.CurrentTime.Add(time.Minute * time.Duration(rand.Intn(5))),
+		PrepStartTime: s.CurrentTime.Add(time.Minute * time.Duration(s.Rng.Intn(5))),
 		Status:        "placed",
 	}
 
@@ -372,7 +377,7 @@ func (s *Simulator) shouldPlaceOrder(user *models.User) bool {
 	}
 
 	orderProbability := user.OrderFrequency * hourFactor / (24 * 60) // Convert to per-minute probability
-	return rand.Float64() < orderProbability
+	return s.Rng.Float64() < orderProbability
 }
 
 func (s *Simulator) generateNextOrderTime(user *models.User) time.Time {
@@ -408,7 +413,7 @@ func (s *Simulator) generateNextOrderTime(user *models.User) time.Time {
 	adjustedInterval := baseInterval * timeOfDayFactor * dayOfWeekFactor
 
 	// Add some randomness (±20% of the adjusted interval)
-	randomFactor := 0.8 + (0.4 * rand.Float64())
+	randomFactor := 0.8 + (0.4 * s.Rng.Float64())
 	finalInterval := adjustedInterval * randomFactor
 
 	// Convert interval to duration
@@ -452,7 +457,7 @@ func (s *Simulator) assignDeliveryPartner(order *models.Order) {
 	restaurant := s.getRestaurant(order.RestaurantID)
 	availablePartners := s.getAvailablePartnersNear(restaurant.Location)
 	if len(availablePartners) > 0 {
-		selectedPartner := availablePartners[rand.Intn(len(availablePartners))]
+		selectedPartner := availablePartners[s.Rng.Intn(len(availablePartners))]
 		order.DeliveryPartnerID = selectedPartner.ID
 		partnerIndex := s.getPartnerIndex(selectedPartner.ID)
 		s.DeliveryPartners[partnerIndex].Status = models.PartnerStatusEnRoutePickup
@@ -546,7 +551,7 @@ func (s *Simulator) estimateArrivalTime(from, to models.Location) time.Time {
 
 	// Add some variability to the travel time
 	variability := 0.2 // 20% variability
-	actualTravelTime := travelTime * (1 + (rand.Float64()*2-1)*variability)
+	actualTravelTime := travelTime * (1 + (s.Rng.Float64()*2-1)*variability)
 
 	return s.CurrentTime.Add(time.Duration(actualTravelTime * float64(time.Hour)))
 }
@@ -572,12 +577,12 @@ func (s *Simulator) selectMenuItems(restaurant *models.Restaurant, user *models.
 
 	// Decide on the meal composition
 	var mealComposition []string
-	if rand.Float32() < 0.7 { // 70% chance of a full meal
+	if s.Rng.Float32() < 0.7 { // 70% chance of a full meal
 		mealComposition = []string{"main course", "side dish", "drink"}
-		if rand.Float32() < 0.3 { // 30% chance to add an appetizer
+		if s.Rng.Float32() < 0.3 { // 30% chance to add an appetizer
 			mealComposition = append(mealComposition, "appetizer")
 		}
-		if rand.Float32() < 0.2 { // 20% chance to add a dessert
+		if s.Rng.Float32() < 0.2 { // 20% chance to add a dessert
 			mealComposition = append(mealComposition, "dessert")
 		}
 	} else { // 30% chance of a simpler order
@@ -623,7 +628,7 @@ func (s *Simulator) selectMenuItems(restaurant *models.Restaurant, user *models.
 
 		// Select an item based on calculated probabilities
 		if totalProb > 0 {
-			randValue := rand.Float64() * totalProb
+			randValue := s.Rng.Float64() * totalProb
 			cumulativeProb := 0.0
 			for i, prob := range probabilities {
 				cumulativeProb += prob
@@ -660,8 +665,6 @@ func (s *Simulator) hasConflictingIngredients(item *models.MenuItem, restriction
 func (s *Simulator) calculateTotalAmount(items []string) float64 {
 	var subtotal float64
 	var discountableTotal float64
-	var discountApplied bool
-	var discountAmount float64
 
 	for _, itemID := range items {
 		item := s.getMenuItem(itemID)
@@ -677,13 +680,13 @@ func (s *Simulator) calculateTotalAmount(items []string) float64 {
 		}
 	}
 
-	// Apply discount if applicable
-	if discountableTotal >= s.Config.MinOrderForDiscount && !discountApplied {
+	// Calculate discount
+	var discountAmount float64
+	if discountableTotal >= s.Config.MinOrderForDiscount {
 		discountAmount = discountableTotal * s.Config.DiscountPercentage
 		if discountAmount > s.Config.MaxDiscountAmount {
 			discountAmount = s.Config.MaxDiscountAmount
 		}
-		discountApplied = true
 	}
 
 	// Calculate tax
@@ -701,7 +704,6 @@ func (s *Simulator) calculateTotalAmount(items []string) float64 {
 	// Round to two decimal places
 	return math.Round(total*100) / 100
 }
-
 func (s *Simulator) calculateDeliveryFee(subtotal float64) float64 {
 	if subtotal >= s.Config.FreeDeliveryThreshold {
 		return 0
@@ -756,7 +758,7 @@ func (s *Simulator) estimatePrepTime(restaurant *models.Restaurant, items []stri
 	loadFactor := 1 + (currentLoad * 0.5) // Up to 50% increase for full capacity
 
 	// Add some randomness to account for unforeseen factors
-	randomFactor := 1 + (rand.Float64()-0.5)*0.1 // ±5% random variation
+	randomFactor := 1 + (s.Rng.Float64()-0.5)*0.1 // ±5% random variation
 
 	finalPrepTime := adjustedTime * loadFactor * randomFactor
 
@@ -834,8 +836,8 @@ func (s *Simulator) findNearestHotspot(loc models.Location) models.Location {
 
 	// Add some randomness to the chosen hotspot
 	jitter := 0.001 // About 111 meters
-	nearestHotspot.Location.Lat += (rand.Float64() - 0.5) * jitter
-	nearestHotspot.Location.Lon += (rand.Float64() - 0.5) * jitter
+	nearestHotspot.Location.Lat += (s.Rng.Float64() - 0.5) * jitter
+	nearestHotspot.Location.Lon += (s.Rng.Float64() - 0.5) * jitter
 
 	return nearestHotspot.Location
 }
