@@ -9,7 +9,7 @@ import (
 
 type RestaurantFactory struct{}
 
-func (rf *RestaurantFactory) CreateRestaurant(config models.Config) models.Restaurant {
+func (rf *RestaurantFactory) CreateRestaurant(config *models.Config) *models.Restaurant {
 
 	// Use config to determine location within the city bounds
 	latRange := config.UrbanRadius / 111.0 // Approx. conversion from km to degrees
@@ -21,7 +21,7 @@ func (rf *RestaurantFactory) CreateRestaurant(config models.Config) models.Resta
 	// Use config for time-related fields
 	avgPrepTime := fake.Float64(0, config.MinPrepTime, config.MaxPrepTime)
 
-	return models.Restaurant{
+	return &models.Restaurant{
 		ID:             cuid.New(),
 		Host:           fake.Internet().Domain(),
 		Name:           fake.Company().Name(),
@@ -49,8 +49,8 @@ func (rf *RestaurantFactory) CreateRestaurant(config models.Config) models.Resta
 }
 
 func generateRandomCuisines() []string {
-	allCuisines := []string{"Italian", "Indian", "American", "Japanese", "Mexican", "Chinese", "Thai", "Greek", "French", "Mediterranean"}
-	cuisineCount := rand.Intn(3) + 1 // 1 to 3 cuisines
+	allCuisines := []string{"Italian", "Cafe", "Indian", "American", "European", "Japanese", "Mexican", "Native American", "Carribean", "Contemporary", "Continental", "Chinese", "Thai", "Vietnamese", "Greek", "French", "Mediterranean", "Moroccan", "Fast Food", "Street Food", "Homemade"}
+	cuisineCount := rand.Intn(4) + 1 // 1 to 4 cuisines
 	cuisines := make([]string, cuisineCount)
 	for i := 0; i < cuisineCount; i++ {
 		cuisines[i] = allCuisines[rand.Intn(len(allCuisines))]

@@ -5,6 +5,26 @@ import (
 	"time"
 )
 
+const (
+	EventPlaceOrder               = "PlaceOrder"
+	EventPrepareOrder             = "PrepareOrder"
+	EventOrderReady               = "OrderReady"
+	EventAssignDeliveryPartner    = "AssignDeliveryPartner"
+	EventPickUpOrder              = "PickUpOrder"
+	EventDeliverOrder             = "DeliverOrder"
+	EventCancelOrder              = "CancelOrder"
+	EventUpdateRestaurantStatus   = "UpdateRestaurantStatus"
+	EventMoveDeliveryPartner      = "MoveDeliveryPartner"
+	EventDeliveryPartnerGoOffline = "DeliveryPartnerGoOffline"
+	EventDeliveryPartnerGoOnline  = "DeliveryPartnerGoOnline"
+	EventUserRateOrder            = "UserRateOrder"
+	EventRestaurantOpenClose      = "RestaurantOpenClose"
+	EventUpdateTraffic            = "UpdateTraffic"
+	EventAddNewUser               = "AddNewUser"
+	EventAddNewRestaurant         = "AddNewRestaurant"
+	EventAddNewDeliveryPartner    = "AddNewDeliveryPartner"
+)
+
 // Event represents a simulation event
 type Event struct {
 	Time time.Time
@@ -42,25 +62,24 @@ func NewEventQueue() *EventQueue {
 }
 
 // Enqueue adds an event to the queue
-func (eq *EventQueue) Enqueue(event Event) {
-	heap.Push((*eventHeap)(&eq.events), &event)
+func (eq *EventQueue) Enqueue(event *Event) {
+	heap.Push((*eventHeap)(&eq.events), event)
 }
 
 // Dequeue removes and returns the earliest event from the queue
-func (eq *EventQueue) Dequeue() (Event, bool) {
+func (eq *EventQueue) Dequeue() *Event {
 	if len(eq.events) == 0 {
-		return Event{}, false
+		return nil
 	}
-	event := heap.Pop((*eventHeap)(&eq.events)).(*Event)
-	return *event, true
+	return heap.Pop((*eventHeap)(&eq.events)).(*Event)
 }
 
 // Peek returns the earliest event without removing it
-func (eq *EventQueue) Peek() (Event, bool) {
+func (eq *EventQueue) Peek() *Event {
 	if len(eq.events) == 0 {
-		return Event{}, false
+		return nil
 	}
-	return *eq.events[0], true
+	return eq.events[0]
 }
 
 // IsEmpty returns true if the queue is empty

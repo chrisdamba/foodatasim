@@ -11,8 +11,8 @@ var fake = faker.New()
 
 type UserFactory struct{}
 
-func (uf *UserFactory) CreateUser(config models.Config) models.User {
-	return models.User{
+func (uf *UserFactory) CreateUser(config *models.Config) *models.User {
+	return &models.User{
 		ID:       cuid.New(),
 		Name:     fake.Person().Name(),
 		JoinDate: fake.Time().TimeBetween(config.StartDate.AddDate(-1, 0, 0), config.StartDate),

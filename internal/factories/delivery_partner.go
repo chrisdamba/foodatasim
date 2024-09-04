@@ -7,8 +7,8 @@ import (
 
 type DeliveryPartnerFactory struct{}
 
-func (df *DeliveryPartnerFactory) CreateDeliveryPartner(config models.Config) models.DeliveryPartner {
-	return models.DeliveryPartner{
+func (df *DeliveryPartnerFactory) CreateDeliveryPartner(config *models.Config) *models.DeliveryPartner {
+	return &models.DeliveryPartner{
 		ID:           cuid.New(),
 		Name:         fake.Person().Name(),
 		JoinDate:     fake.Time().TimeBetween(config.StartDate.AddDate(-1, 0, 0), config.StartDate),
