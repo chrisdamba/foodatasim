@@ -16,7 +16,18 @@ type Config struct {
 	WeekendFactor      float64   `json:"weekend_factor"`
 	TrafficVariability float64   `json:"traffic_variability"`
 
-	// New fields
+	// Additional fields
+	CityName              string  `json:"city_name"`
+	DefaultCurrency       int     `json:"default_currency"`
+	MinPrepTime           int     `json:"min_prep_time"`
+	MaxPrepTime           int     `json:"max_prep_time"`
+	MinRating             float64 `json:"min_rating"`
+	MaxRating             float64 `json:"max_rating"`
+	MaxInitialRatings     float64 `json:"max_initial_ratings"`
+	MinEfficiency         float64 `json:"min_efficiency"`
+	MaxEfficiency         float64 `json:"max_efficiency"`
+	MinCapacity           int     `json:"min_capacity"`
+	MaxCapacity           int     `json:"max_capacity"`
 	TaxRate               float64 `json:"tax_rate"`
 	ServiceFeePercentage  float64 `json:"service_fee_percentage"`
 	DiscountPercentage    float64 `json:"discount_percentage"`
