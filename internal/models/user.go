@@ -12,4 +12,10 @@ type User struct {
 	Preferences         []string  `json:"preferences"`
 	DietaryRestrictions []string  `json:"diet_restrictions"`
 	OrderFrequency      float64   `json:"order_frequency"`
+	LastOrderTime       time.Time `json:"last_order_time"`
+}
+
+type UserBehaviourUpdate struct {
+	UserID         string
+	OrderFrequency float64
 }

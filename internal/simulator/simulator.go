@@ -9,6 +9,7 @@ import (
 	"github.com/jaswdr/faker"
 	"io"
 	"log"
+	"math"
 	"math/rand"
 	"os"
 	"strings"
@@ -167,7 +168,16 @@ func (s *Simulator) processEvent(event *models.Event) {
 		s.handleOrderReady(event.Data.(*models.Order))
 	case models.EventAssignDeliveryPartner:
 		s.handleAssignDeliveryPartner(event)
-
+	case models.EventUpdatePartnerLocation:
+		s.handleUpdatePartnerLocation(event.Data.(*models.PartnerLocationUpdate))
+	case models.EventDeliverOrder:
+		s.handleDeliverOrder(event.Data.(*models.Order))
+	case models.EventCancelOrder:
+		s.handleCancelOrder(event.Data.(*models.Order))
+	case models.EventUpdateUserBehaviour:
+		s.handleUpdateUserBehaviour(event.Data.(*models.UserBehaviourUpdate))
+	case models.EventUpdateRestaurantStatus:
+		s.handleUpdateRestaurantStatus(event.Data.(*models.Restaurant))
 	}
 }
 
@@ -215,29 +225,13 @@ func (s *Simulator) Run() {
 					}
 				}
 			}
-			//for nil != s.EventQueue.Peek() && s.EventQueue.Peek().Time.Before(s.CurrentTime) {
-			//	event := s.EventQueue.Dequeue()
-			//	s.processEvent(event)
-			//	eventsCount++
-			//
-			//	// Generate output for the event
-			//	eventMsg, err := s.serializeEvent(event)
-			//	if err != nil {
-			//		log.Printf("Error serializing event: %v", err)
-			//		continue
-			//	}
-			//	if err := output.WriteMessage(eventMsg.Topic, eventMsg.Message); err != nil {
-			//		log.Printf("Failed to write message: %v", err)
-			//	}
-			//}
-
-			// Run time-step simulation
+			// run time-step simulation
 			s.simulateTimeStep()
 
-			// Show progress
+			// show progress
 			s.showProgress(eventsCount)
 
-			// Advance simulation time
+			// advance simulation time
 			s.CurrentTime = s.CurrentTime.Add(1 * time.Minute)
 
 		default:
@@ -255,7 +249,7 @@ func (s *Simulator) simulateTimeStep() {
 	s.generateOrders()
 	s.updateOrderStatuses()
 	s.updateDeliveryPartnerLocations()
-	s.updateUserBehavior()
+	s.updateUserBehaviour()
 	s.updateRestaurantStatus()
 }
 
@@ -396,26 +390,131 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			EstimatedDeliveryTime: order.EstimatedDeliveryTime.Unix(),
 		}
 		topic = "order_pickup_events"
-	// Add cases for other event types as needed, such as Delivery, Review, etc.
+
+	case models.EventUpdatePartnerLocation:
+		update := event.Data.(*models.PartnerLocationUpdate)
+		partner := s.getDeliveryPartner(update.PartnerID)
+		if partner == nil {
+			return models.EventMessage{}, fmt.Errorf("partner not found: %s", update.PartnerID)
+		}
+
+		eventData = struct {
+			BaseEvent
+			PartnerID    string          `json:"partnerId"`
+			OrderID      string          `json:"orderId,omitempty"`
+			NewLocation  models.Location `json:"newLocation"`
+			CurrentOrder string          `json:"currentOrder,omitempty"`
+		}{
+			BaseEvent:    baseEvent,
+			PartnerID:    update.PartnerID,
+			OrderID:      update.OrderID,
+			NewLocation:  update.NewLocation,
+			CurrentOrder: partner.CurrentOrderID,
+		}
+		topic = "partner_location_events"
+
+	case models.EventDeliverOrder:
+		order := event.Data.(*models.Order)
+		baseEvent.RestaurantID = order.RestaurantID
+		baseEvent.DeliveryID = order.DeliveryPartnerID
+		baseEvent.UserID = order.CustomerID
+
+		eventData = struct {
+			BaseEvent
+			OrderID            string `json:"orderId"`
+			Status             string `json:"status"`
+			ActualDeliveryTime int64  `json:"actual_delivery_time"`
+		}{
+			BaseEvent:          baseEvent,
+			OrderID:            order.ID,
+			Status:             order.Status,
+			ActualDeliveryTime: order.ActualDeliveryTime.Unix(),
+		}
+		topic = "order_delivery_events"
+
+	case models.EventCancelOrder:
+		order := event.Data.(*models.Order)
+		baseEvent.RestaurantID = order.RestaurantID
+		baseEvent.UserID = order.CustomerID
+
+		eventData = struct {
+			BaseEvent
+			OrderID          string `json:"orderId"`
+			Status           string `json:"status"`
+			CancellationTime int64  `json:"cancellation_time"`
+		}{
+			BaseEvent:        baseEvent,
+			OrderID:          order.ID,
+			Status:           order.Status,
+			CancellationTime: s.CurrentTime.Unix(),
+		}
+		topic = "order_cancellation_events"
+
+	case models.EventUpdateUserBehaviour:
+		update := event.Data.(*models.UserBehaviourUpdate)
+		user := s.getUser(update.UserID)
+		if user == nil {
+			return models.EventMessage{}, fmt.Errorf("user not found: %s", update.UserID)
+		}
+
+		userBehaviorEvent := struct {
+			BaseEvent
+			UserID         string  `json:"userId"`
+			OrderFrequency float64 `json:"orderFrequency"`
+			LastOrderTime  int64   `json:"lastOrderTime,omitempty"`
+		}{
+			BaseEvent:      baseEvent,
+			UserID:         update.UserID,
+			OrderFrequency: update.OrderFrequency,
+		}
+
+		// only include LastOrderTime if it's not the zero value
+		if !user.LastOrderTime.IsZero() {
+			userBehaviorEvent.LastOrderTime = user.LastOrderTime.Unix()
+		}
+
+		eventData = userBehaviorEvent
+		topic = "user_behavior_events"
+
+	case models.EventUpdateRestaurantStatus:
+		restaurant := event.Data.(*models.Restaurant)
+		baseEvent.RestaurantID = restaurant.ID
+
+		prepTime := restaurant.PrepTime
+		if math.IsNaN(prepTime) {
+			prepTime = restaurant.MinPrepTime
+		}
+
+		eventData = struct {
+			BaseEvent
+			Capacity int     `json:"capacity"`
+			PrepTime float64 `json:"prep_time"`
+		}{
+			BaseEvent: baseEvent,
+			Capacity:  restaurant.Capacity,
+			PrepTime:  prepTime,
+		}
+		topic = "restaurant_status_events"
+
 	default:
 		return models.EventMessage{}, fmt.Errorf("unknown event type: %v", event.Type)
 	}
 
-	// Serialize the event to JSON
+	// serialize the event to JSON
 	data, err := json.Marshal(eventData)
 	if err != nil {
 		log.Printf("Error serializing event: %v", err)
 		return models.EventMessage{}, err
 	}
 
-	// Return the event message
+	// return the event message
 	return models.EventMessage{
 		Topic:   topic,
 		Message: data,
 	}, nil
 }
 
-// Event handlers
+// event handlers
 func (s *Simulator) handlePlaceOrder(user *models.User) {
 	// Schedule next order for this user
 	nextOrderTime := s.generateNextOrderTime(user)
@@ -622,6 +721,13 @@ func (s *Simulator) handlePickUpOrder(event *models.Event) {
 	// Update delivery partner status
 	partner.Status = models.PartnerStatusEnRouteDelivery
 
+	// Trigger the "order in transit" event
+	s.EventQueue.Enqueue(&models.Event{
+		Time: s.CurrentTime,
+		Type: models.EventOrderInTransit,
+		Data: order,
+	})
+
 	// Estimate delivery time
 	estimatedDeliveryTime := s.estimateDeliveryTime(partner, order)
 	order.EstimatedDeliveryTime = estimatedDeliveryTime
@@ -635,4 +741,119 @@ func (s *Simulator) handlePickUpOrder(event *models.Event) {
 
 	log.Printf("Order %s picked up by partner %s. Estimated delivery time: %s",
 		order.ID, partner.ID, estimatedDeliveryTime.Format(time.RFC3339))
+}
+
+func (s *Simulator) handleCancelOrder(order *models.Order) {
+	// Update order status
+	order.Status = models.OrderStatusCancelled
+
+	// If a delivery partner was assigned, update their status
+	if order.DeliveryPartnerID != "" {
+		partner := s.getDeliveryPartner(order.DeliveryPartnerID)
+		if partner != nil {
+			partner.Status = models.PartnerStatusAvailable
+		}
+	}
+
+	// If the order was being prepared, update restaurant status
+	if order.Status == models.OrderStatusPreparing {
+		restaurant := s.getRestaurant(order.RestaurantID)
+		if restaurant != nil {
+			// Remove the order from the restaurant's current orders
+			for i, currentOrder := range restaurant.CurrentOrders {
+				if currentOrder.ID == order.ID {
+					restaurant.CurrentOrders = append(restaurant.CurrentOrders[:i], restaurant.CurrentOrders[i+1:]...)
+					break
+				}
+			}
+		}
+	}
+
+	log.Printf("Order %s cancelled at %s", order.ID, s.CurrentTime.Format(time.RFC3339))
+}
+
+func (s *Simulator) handleUpdateRestaurantStatus(restaurant *models.Restaurant) {
+	// update restaurant metrics
+	s.updateRestaurantMetrics(restaurant)
+
+	// adjust restaurant capacity based on current conditions
+	oldCapacity := restaurant.Capacity
+	restaurant.Capacity = s.adjustRestaurantCapacity(restaurant)
+
+	// update prep time based on current load
+	oldPrepTime := restaurant.PrepTime
+	restaurant.PrepTime = s.adjustPrepTime(restaurant)
+
+	// schedule next update
+	s.EventQueue.Enqueue(&models.Event{
+		Time: s.CurrentTime.Add(15 * time.Minute), // Update every 15 minutes
+		Type: models.EventUpdateRestaurantStatus,
+		Data: restaurant,
+	})
+
+	log.Printf("Updated status for restaurant %s at %s. Capacity: %d -> %d, Prep time: %.2f -> %.2f",
+		restaurant.ID, s.CurrentTime.Format(time.RFC3339),
+		oldCapacity, restaurant.Capacity,
+		oldPrepTime, restaurant.PrepTime)
+}
+
+func (s *Simulator) handleUpdatePartnerLocation(update *models.PartnerLocationUpdate) {
+	partner := s.getDeliveryPartner(update.PartnerID)
+	if partner != nil {
+		partner.CurrentLocation = update.NewLocation
+	}
+}
+
+func (s *Simulator) handleDeliverOrder(order *models.Order) {
+	// Get the delivery partner
+	partner := s.getDeliveryPartner(order.DeliveryPartnerID)
+	if partner == nil {
+		log.Printf("Error: Delivery partner not found for order %s", order.ID)
+		return
+	}
+
+	// Get the user
+	user := s.getUser(order.CustomerID)
+	if user == nil {
+		log.Printf("Error: User not found for order %s", order.ID)
+		return
+	}
+
+	// Check if the delivery partner is at the user's location
+	if !s.isAtLocation(partner.CurrentLocation, user.Location) {
+		// If not at the location, reschedule the delivery
+		nextAttempt := s.CurrentTime.Add(5 * time.Minute)
+		s.EventQueue.Enqueue(&models.Event{
+			Time: nextAttempt,
+			Type: models.EventDeliverOrder,
+			Data: order,
+		})
+		log.Printf("Delivery partner not at user location. Rescheduling delivery for order %s at %s",
+			order.ID, nextAttempt.Format(time.RFC3339))
+		return
+	}
+
+	// Update order status
+	order.Status = models.OrderStatusDelivered
+	order.ActualDeliveryTime = s.CurrentTime
+
+	// Update delivery partner status
+	partner.Status = models.PartnerStatusAvailable
+
+	// Generate a review event
+	s.EventQueue.Enqueue(&models.Event{
+		Time: s.CurrentTime.Add(30 * time.Minute), // Assume user leaves review after 30 minutes
+		Type: models.EventGenerateReview,
+		Data: order,
+	})
+
+	log.Printf("Order %s delivered to user %s at %s",
+		order.ID, user.ID, s.CurrentTime.Format(time.RFC3339))
+}
+
+func (s *Simulator) handleUpdateUserBehaviour(update *models.UserBehaviourUpdate) {
+	user := s.getUser(update.UserID)
+	if user != nil {
+		user.OrderFrequency = update.OrderFrequency
+	}
 }

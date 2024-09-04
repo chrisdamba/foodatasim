@@ -10,3 +10,9 @@ type Hotspot struct {
 	Location Location
 	Weight   float64 // Represents the importance or activity level of the hotspot
 }
+
+type PartnerLocationUpdate struct {
+	PartnerID   string
+	OrderID     string
+	NewLocation Location
+}

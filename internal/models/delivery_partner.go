@@ -10,6 +10,7 @@ type DeliveryPartner struct {
 	TotalRatings    float64   `json:"total_ratings"`
 	Experience      float64   `json:"experience"` // Experience score
 	AvgSpeed        float64   `json:"avg_speed"`
+	CurrentOrderID  string    `json:"current_order_id"`
 	CurrentLocation Location  `json:"current_location"`
 	Status          string    `json:"status"` // "available", "en_route_to_pickup", "en_route_to_delivery"
 }

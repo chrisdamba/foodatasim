@@ -24,9 +24,18 @@ func (s *Simulator) getUser(userID string) *models.User {
 	return nil
 }
 
-func (s *Simulator) updateUserBehavior() {
+func (s *Simulator) updateUserBehaviour() {
 	for i, user := range s.Users {
-		s.Users[i].OrderFrequency = s.adjustOrderFrequency(user)
+		orderFrequency := s.adjustOrderFrequency(user)
+		s.EventQueue.Enqueue(&models.Event{
+			Time: s.CurrentTime,
+			Type: models.EventUpdateUserBehaviour,
+			Data: &models.UserBehaviourUpdate{
+				UserID:         user.ID,
+				OrderFrequency: orderFrequency,
+			},
+		})
+		s.Users[i].OrderFrequency = orderFrequency
 	}
 }
 
@@ -119,6 +128,11 @@ func (s *Simulator) updateRestaurantStatus() {
 	for i, restaurant := range s.Restaurants {
 		s.Restaurants[i].PrepTime = s.adjustPrepTime(restaurant)
 		s.Restaurants[i].PickupEfficiency = s.adjustPickupEfficiency(restaurant)
+		s.EventQueue.Enqueue(&models.Event{
+			Time: s.CurrentTime,
+			Type: models.EventUpdateRestaurantStatus,
+			Data: s.Restaurants[i],
+		})
 	}
 }
 
@@ -345,23 +359,70 @@ func (s *Simulator) createAndAddOrder(user *models.User) (*models.Order, error) 
 func (s *Simulator) updateOrderStatuses() {
 	for i, order := range s.Orders {
 		switch order.Status {
-		case "placed":
+		case models.OrderStatusPlaced:
 			if s.CurrentTime.After(order.PrepStartTime) {
-				s.Orders[i].Status = "preparing"
+				s.Orders[i].Status = models.OrderStatusPreparing
+				s.EventQueue.Enqueue(&models.Event{
+					Time: s.CurrentTime,
+					Type: models.EventPrepareOrder,
+					Data: order,
+				})
 			}
-		case "preparing":
+		case models.OrderStatusPreparing:
 			if s.CurrentTime.After(order.PickupTime) {
-				s.Orders[i].Status = "ready_for_pickup"
+				s.Orders[i].Status = models.OrderStatusReady
+				s.EventQueue.Enqueue(&models.Event{
+					Time: s.CurrentTime,
+					Type: models.EventOrderReady,
+					Data: order,
+				})
 			}
-		case "ready_for_pickup":
+		case models.OrderStatusReady:
 			if s.isDeliveryPartnerAtRestaurant(order) {
-				s.Orders[i].Status = "picked_up"
+				s.Orders[i].Status = models.OrderStatusPickedUp
+				s.EventQueue.Enqueue(&models.Event{
+					Time: s.CurrentTime,
+					Type: models.EventPickUpOrder,
+					Data: order,
+				})
 			}
-		case "picked_up":
-			if s.isOrderDelivered(order) {
-				s.Orders[i].Status = "delivered"
-				review := s.createReview(s.Orders[i])
-				s.updateRatings(review)
+		case models.OrderStatusPickedUp:
+			partner := s.getDeliveryPartner(order.DeliveryPartnerID)
+			if partner == nil {
+				log.Printf("Error: Delivery partner not found for order %s", order.ID)
+				continue
+			}
+
+			user := s.getUser(order.CustomerID)
+			if user == nil {
+				log.Printf("Error: User not found for order %s", order.ID)
+				continue
+			}
+
+			if s.isAtLocation(partner.CurrentLocation, user.Location) || s.isOrderDelivered(order) {
+				// Order has been delivered
+				s.Orders[i].Status = models.OrderStatusDelivered
+				s.Orders[i].ActualDeliveryTime = s.CurrentTime
+				s.EventQueue.Enqueue(&models.Event{
+					Time: s.CurrentTime,
+					Type: models.EventDeliverOrder,
+					Data: &s.Orders[i],
+				})
+				// Schedule review creation for later
+				s.EventQueue.Enqueue(&models.Event{
+					Time: s.CurrentTime.Add(30 * time.Minute), // Assume user leaves review after 30 minutes
+					Type: models.EventGenerateReview,
+					Data: &s.Orders[i],
+				})
+			} else if s.Orders[i].Status != models.OrderStatusInTransit {
+				// Order is just starting transit
+				s.Orders[i].Status = models.OrderStatusInTransit
+				s.Orders[i].InTransitTime = s.CurrentTime
+				s.EventQueue.Enqueue(&models.Event{
+					Time: s.CurrentTime,
+					Type: models.EventOrderInTransit,
+					Data: &s.Orders[i],
+				})
 			}
 		}
 	}
@@ -528,19 +589,54 @@ func (s *Simulator) notifyDeliveryPartner(partner *models.DeliveryPartner, order
 func (s *Simulator) updateDeliveryPartnerLocations() {
 	for i, partner := range s.DeliveryPartners {
 		switch partner.Status {
-		case "available":
-			s.DeliveryPartners[i].CurrentLocation = s.moveTowardsHotspot(partner)
-		case "en_route_to_pickup":
+		case models.PartnerStatusAvailable:
+			newLocation := s.moveTowardsHotspot(partner)
+			s.DeliveryPartners[i].CurrentLocation = newLocation
+			s.EventQueue.Enqueue(&models.Event{
+				Time: s.CurrentTime,
+				Type: models.EventUpdatePartnerLocation,
+				Data: &models.PartnerLocationUpdate{
+					PartnerID:   partner.ID,
+					NewLocation: newLocation,
+				},
+			})
+		case models.PartnerStatusEnRoutePickup:
 			order := s.getPartnerCurrentOrder(partner)
-			restaurant := s.getRestaurant(order.RestaurantID)
-			s.DeliveryPartners[i].CurrentLocation = s.moveTowards(partner.CurrentLocation, restaurant.Location)
-			if s.isAtLocation(partner.CurrentLocation, restaurant.Location) {
-				s.DeliveryPartners[i].Status = "waiting_for_pickup"
+			if order != nil {
+				restaurant := s.getRestaurant(order.RestaurantID)
+				if restaurant != nil {
+					newLocation := s.moveTowards(partner.CurrentLocation, restaurant.Location)
+					s.DeliveryPartners[i].CurrentLocation = newLocation
+					s.EventQueue.Enqueue(&models.Event{
+						Time: s.CurrentTime,
+						Type: models.EventUpdatePartnerLocation,
+						Data: &models.PartnerLocationUpdate{
+							PartnerID:   partner.ID,
+							NewLocation: newLocation,
+						},
+					})
+					if s.isAtLocation(partner.CurrentLocation, restaurant.Location) {
+						s.DeliveryPartners[i].Status = models.PartnerStatusWaitingForPickup
+					}
+				}
 			}
-		case "en_route_to_delivery":
+		case models.PartnerStatusEnRouteDelivery:
 			order := s.getPartnerCurrentOrder(partner)
-			user := s.getUser(order.CustomerID)
-			s.DeliveryPartners[i].CurrentLocation = s.moveTowards(partner.CurrentLocation, user.Location)
+			if order != nil {
+				user := s.getUser(order.CustomerID)
+				if user != nil {
+					newLocation := s.moveTowards(partner.CurrentLocation, user.Location)
+					s.EventQueue.Enqueue(&models.Event{
+						Time: s.CurrentTime,
+						Type: models.EventUpdatePartnerLocation,
+						Data: &models.PartnerLocationUpdate{
+							PartnerID:   partner.ID,
+							NewLocation: newLocation,
+						},
+					})
+					s.DeliveryPartners[i].CurrentLocation = newLocation
+				}
+			}
 		}
 	}
 }
@@ -589,6 +685,33 @@ func (s *Simulator) estimateDeliveryTime(partner *models.DeliveryPartner, order 
 	adjustedTime := time.Duration(float64(totalEstimatedTime) * (1 + (s.Rng.Float64()*2-1)*variability))
 
 	return s.CurrentTime.Add(adjustedTime)
+}
+
+func (s *Simulator) scheduleRouteUpdates(order *models.Order, partner *models.DeliveryPartner, user *models.User, estimatedArrivalTime time.Time) {
+	// calculate the number of updates (e.g., every 5 minutes)
+	duration := estimatedArrivalTime.Sub(s.CurrentTime)
+	updateInterval := 5 * time.Minute
+	numUpdates := int(duration / updateInterval)
+
+	for i := 1; i <= numUpdates; i++ {
+		updateTime := s.CurrentTime.Add(time.Duration(i) * updateInterval)
+		s.EventQueue.Enqueue(&models.Event{
+			Time: updateTime,
+			Type: models.EventUpdatePartnerLocation,
+			Data: &models.PartnerLocationUpdate{
+				PartnerID:   partner.ID,
+				OrderID:     order.ID,
+				NewLocation: s.interpolateLocation(partner.CurrentLocation, user.Location, float64(i)/float64(numUpdates+1)),
+			},
+		})
+	}
+}
+
+func (s *Simulator) interpolateLocation(start, end models.Location, fraction float64) models.Location {
+	return models.Location{
+		Lat: start.Lat + (end.Lat-start.Lat)*fraction,
+		Lon: start.Lon + (end.Lon-start.Lon)*fraction,
+	}
 }
 
 func (s *Simulator) isOrderDelivered(order models.Order) bool {
@@ -739,6 +862,7 @@ func (s *Simulator) calculateTotalAmount(items []string) float64 {
 	// Round to two decimal places
 	return math.Round(total*100) / 100
 }
+
 func (s *Simulator) calculateDeliveryFee(subtotal float64) float64 {
 	if subtotal >= s.Config.FreeDeliveryThreshold {
 		return 0
@@ -772,6 +896,80 @@ func (s *Simulator) updateRestaurantMetrics(restaurant *models.Restaurant) {
 
 	// Update restaurant capacity
 	restaurant.Capacity = int(float64(restaurant.Capacity) * restaurant.PickupEfficiency)
+}
+
+func (s *Simulator) adjustRestaurantCapacity(restaurant *models.Restaurant) int {
+	// Base capacity
+	baseCapacity := restaurant.Capacity
+
+	// Time-based adjustment
+	timeAdjustment := s.getTimeBasedAdjustment(s.CurrentTime)
+
+	// Demand-based adjustment
+	demandAdjustment := s.getDemandBasedAdjustment(restaurant)
+
+	// Day of week adjustment
+	dayAdjustment := s.getDayOfWeekAdjustment(s.CurrentTime)
+
+	// Calculate new capacity
+	newCapacity := int(float64(baseCapacity) * timeAdjustment * demandAdjustment * dayAdjustment)
+
+	// Ensure capacity doesn't go below a minimum threshold or above a maximum
+	minCapacity := max(1, int(float64(baseCapacity)*0.5)) // At least 1, or 50% of base capacity
+	maxCapacity := int(float64(baseCapacity) * 1.5)       // 150% of base capacity
+
+	newCapacity = max(minCapacity, min(newCapacity, maxCapacity))
+
+	return newCapacity
+}
+
+func (s *Simulator) getTimeBasedAdjustment(currentTime time.Time) float64 {
+	hour := currentTime.Hour()
+	switch {
+	case hour >= 11 && hour < 14: // Lunch rush
+		return 1.3
+	case hour >= 18 && hour < 21: // Dinner rush
+		return 1.4
+	case hour >= 23 || hour < 6: // Late night / Early morning
+		return 0.7
+	default:
+		return 1.0
+	}
+}
+
+func (s *Simulator) getDemandBasedAdjustment(restaurant *models.Restaurant) float64 {
+	// Calculate recent order volume (last hour)
+	recentOrders := 0
+	for _, order := range restaurant.CurrentOrders {
+		if s.CurrentTime.Sub(order.OrderPlacedAt) <= 1*time.Hour {
+			recentOrders++
+		}
+	}
+
+	// Calculate the ratio of recent orders to current capacity
+	demandRatio := float64(recentOrders) / float64(restaurant.Capacity)
+
+	switch {
+	case demandRatio > 0.9: // Very high demand
+		return 1.2
+	case demandRatio > 0.7: // High demand
+		return 1.1
+	case demandRatio < 0.3: // Low demand
+		return 0.9
+	default:
+		return 1.0
+	}
+}
+
+func (s *Simulator) getDayOfWeekAdjustment(currentTime time.Time) float64 {
+	switch currentTime.Weekday() {
+	case time.Friday, time.Saturday:
+		return 1.2 // Increase capacity on weekends
+	case time.Sunday:
+		return 1.1 // Slight increase on Sundays
+	default:
+		return 1.0
+	}
 }
 
 func (s *Simulator) estimatePrepTime(restaurant *models.Restaurant, items []string) float64 {
@@ -927,8 +1125,12 @@ func (s *Simulator) adjustPrepTime(restaurant *models.Restaurant) float64 {
 	// Adjust prep time based on current load
 	adjustedPrepTime := restaurant.AvgPrepTime * loadFactor
 
-	// Ensure prep time doesn't go below minimum
-	return math.Max(adjustedPrepTime, restaurant.MinPrepTime)
+	// Ensure prep time doesn't go below minimum or become NaN
+	if math.IsNaN(adjustedPrepTime) || adjustedPrepTime < restaurant.MinPrepTime {
+		return restaurant.MinPrepTime
+	}
+
+	return adjustedPrepTime
 }
 
 func (s *Simulator) adjustPickupEfficiency(restaurant *models.Restaurant) float64 {
@@ -1105,4 +1307,18 @@ func isBreakfastTime(t time.Time) bool {
 func updateRating(currentRating, newRating, alpha float64) float64 {
 	updatedRating := (alpha * newRating) + ((1 - alpha) * currentRating)
 	return math.Max(1, math.Min(5, updatedRating))
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

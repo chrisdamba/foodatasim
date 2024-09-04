@@ -15,6 +15,7 @@ type Order struct {
 	EstimatedPickupTime   time.Time `json:"estimated_pickup_time"`
 	EstimatedDeliveryTime time.Time `json:"estimated_delivery_time"`
 	PickupTime            time.Time `json:"pickup_time"`
+	InTransitTime         time.Time `json:"in_transit_time"`
 	ActualDeliveryTime    time.Time `json:"actual_delivery_time"`
 	Status                string    `json:"status"`         // e.g., "placed", "preparing", "in_transit", "delivered", "cancelled"
 	PaymentMethod         string    `json:"payment_method"` // e.g., "card", "cash", "wallet"

@@ -11,9 +11,11 @@ const (
 	EventOrderReady               = "OrderReady"
 	EventAssignDeliveryPartner    = "AssignDeliveryPartner"
 	EventPickUpOrder              = "PickUpOrder"
+	EventOrderInTransit           = "OrderInTransit"
 	EventDeliverOrder             = "DeliverOrder"
 	EventCancelOrder              = "CancelOrder"
 	EventUpdateRestaurantStatus   = "UpdateRestaurantStatus"
+	EventUpdatePartnerLocation    = "UpdatePartnerLocation"
 	EventMoveDeliveryPartner      = "MoveDeliveryPartner"
 	EventDeliveryPartnerGoOffline = "DeliveryPartnerGoOffline"
 	EventDeliveryPartnerGoOnline  = "DeliveryPartnerGoOnline"
@@ -21,8 +23,10 @@ const (
 	EventRestaurantOpenClose      = "RestaurantOpenClose"
 	EventUpdateTraffic            = "UpdateTraffic"
 	EventAddNewUser               = "AddNewUser"
+	EventUpdateUserBehaviour      = "UpdateUserBehaviour"
 	EventAddNewRestaurant         = "AddNewRestaurant"
 	EventAddNewDeliveryPartner    = "AddNewDeliveryPartner"
+	EventGenerateReview           = "GenerateReview"
 )
 
 // Event represents a simulation event
