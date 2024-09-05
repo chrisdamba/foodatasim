@@ -43,9 +43,9 @@ type Simulator struct {
 	Config                      *models.Config
 	Users                       []*models.User
 	DeliveryPartners            []*models.DeliveryPartner
-	Reviews                     []models.Review
 	TrafficConditions           []models.TrafficCondition
 	Orders                      []models.Order
+	Reviews                     []models.Review
 	OrdersByUser                map[string][]models.Order
 	CompletedOrdersByRestaurant map[string][]models.Order
 	Restaurants                 map[string]*models.Restaurant
@@ -180,6 +180,9 @@ func (s *Simulator) processEvent(event *models.Event) {
 		s.handleUpdateUserBehaviour(event.Data.(*models.UserBehaviourUpdate))
 	case models.EventUpdateRestaurantStatus:
 		s.handleUpdateRestaurantStatus(event.Data.(*models.Restaurant))
+	case models.EventGenerateReview:
+		s.handleGenerateReview(event.Data.(*models.Order))
+
 	}
 }
 
@@ -205,7 +208,7 @@ func (s *Simulator) Run() {
 	for s.CurrentTime.Before(s.Config.EndDate) {
 		select {
 		case <-ticker.C:
-			// Process any events that are due
+			// process any events that are due
 			for {
 				nextEvent := s.EventQueue.Peek()
 				if nextEvent == nil || nextEvent.Time.After(s.CurrentTime) {
@@ -216,7 +219,7 @@ func (s *Simulator) Run() {
 					s.processEvent(event)
 					eventsCount++
 
-					// Serialize and write the event
+					// serialize and write the event
 					eventMsg, err := s.serializeEvent(*event)
 					if err != nil {
 						log.Printf("Error serializing event: %v", err)
@@ -237,7 +240,7 @@ func (s *Simulator) Run() {
 			s.CurrentTime = s.CurrentTime.Add(1 * time.Minute)
 
 		default:
-			// If there are no events to process and no time has passed,
+			// if there are no events to process and no time has passed,
 			// we can sleep for a short duration to avoid busy-waiting
 			time.Sleep(10 * time.Millisecond)
 		}
@@ -551,6 +554,49 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		}
 		topic = "restaurant_status_events"
 
+	case models.EventGenerateReview:
+		order := event.Data.(*models.Order)
+
+		// Create the review
+		review := s.createReview(order)
+
+		// Add the review to the simulator's reviews
+		s.Reviews = append(s.Reviews, review)
+
+		// Update ratings based on the review
+		s.updateRatings(review)
+
+		eventData = struct {
+			BaseEvent
+			ReviewID          string  `json:"reviewId"`
+			OrderID           string  `json:"orderId"`
+			CustomerID        string  `json:"customerId"`
+			RestaurantID      string  `json:"restaurantId"`
+			DeliveryPartnerID string  `json:"deliveryPartnerId"`
+			FoodRating        float64 `json:"foodRating"`
+			DeliveryRating    float64 `json:"deliveryRating"`
+			OverallRating     float64 `json:"overallRating"`
+			Comment           string  `json:"comment"`
+			CreatedAt         int64   `json:"createdAt"`
+			OrderTotal        float64 `json:"orderTotal"`
+			DeliveryTime      int64   `json:"deliveryTime"`
+		}{
+			BaseEvent:         baseEvent,
+			ReviewID:          review.ID,
+			OrderID:           review.OrderID,
+			CustomerID:        review.CustomerID,
+			RestaurantID:      review.RestaurantID,
+			DeliveryPartnerID: review.DeliveryPartnerID,
+			FoodRating:        review.FoodRating,
+			DeliveryRating:    review.DeliveryRating,
+			OverallRating:     review.OverallRating,
+			Comment:           review.Comment,
+			CreatedAt:         review.CreatedAt.Unix(),
+			OrderTotal:        order.TotalAmount,
+			DeliveryTime:      order.ActualDeliveryTime.Sub(order.OrderPlacedAt).Milliseconds(),
+		}
+		topic = "review_events"
+
 	default:
 		return models.EventMessage{}, fmt.Errorf("unknown event type: %v", event.Type)
 	}
@@ -607,7 +653,7 @@ func (s *Simulator) handlePrepareOrder(order *models.Order) {
 	order.PrepStartTime = s.CurrentTime
 	order.PickupTime = readyTime
 
-	// Update restaurant status
+	// Update restaurant orders
 	restaurant.CurrentOrders = append(restaurant.CurrentOrders, *order)
 
 	// Schedule the next event (order ready)
@@ -933,4 +979,23 @@ func (s *Simulator) handleUpdateUserBehaviour(update *models.UserBehaviourUpdate
 	if user != nil {
 		user.OrderFrequency = update.OrderFrequency
 	}
+}
+
+func (s *Simulator) handleGenerateReview(order *models.Order) {
+	// Check if we should generate a review for this order
+	if !s.shouldGenerateReview(order) {
+		return
+	}
+
+	// Enqueue the review generation event
+	s.EventQueue.Enqueue(&models.Event{
+		Time: s.CurrentTime,
+		Type: models.EventGenerateReview,
+		Data: order,
+	})
+
+	// Set the ReviewGenerated flag to true
+	order.ReviewGenerated = true
+
+	log.Printf("Review generation for order %s scheduled. %.1f", order.ID)
 }

@@ -35,38 +35,39 @@ type Config struct {
 	OutputFile         string    `mapstructure:"output_file_path"`
 	Continuous         bool      `mapstructure:"continuous"`
 	// Additional fields
-	CityName              string       `mapstructure:"city_name"`
-	DefaultCurrency       int          `mapstructure:"default_currency"`
-	MinPrepTime           int          `mapstructure:"min_prep_time"`
-	MaxPrepTime           int          `mapstructure:"max_prep_time"`
-	MinRating             float64      `mapstructure:"min_rating"`
-	MaxRating             float64      `mapstructure:"max_rating"`
-	MaxInitialRatings     float64      `mapstructure:"max_initial_ratings"`
-	MinEfficiency         float64      `mapstructure:"min_efficiency"`
-	MaxEfficiency         float64      `mapstructure:"max_efficiency"`
-	MinCapacity           int          `mapstructure:"min_capacity"`
-	MaxCapacity           int          `mapstructure:"max_capacity"`
-	TaxRate               float64      `mapstructure:"tax_rate"`
-	ServiceFeePercentage  float64      `mapstructure:"service_fee_percentage"`
-	DiscountPercentage    float64      `mapstructure:"discount_percentage"`
-	MinOrderForDiscount   float64      `mapstructure:"min_order_for_discount"`
-	MaxDiscountAmount     float64      `mapstructure:"max_discount_amount"`
-	BaseDeliveryFee       float64      `mapstructure:"base_delivery_fee"`
-	FreeDeliveryThreshold float64      `mapstructure:"free_delivery_threshold"`
-	SmallOrderThreshold   float64      `mapstructure:"small_order_threshold"`
-	SmallOrderFee         float64      `mapstructure:"small_order_fee"`
-	RestaurantRatingAlpha float64      `mapstructure:"restaurant_rating_alpha"`
-	PartnerRatingAlpha    float64      `mapstructure:"partner_rating_alpha"`
-	ReviewData            []ReviewData `mapstructure:"review_data"`
+	CityName              string        `mapstructure:"city_name"`
+	DefaultCurrency       int           `mapstructure:"default_currency"`
+	MinPrepTime           int           `mapstructure:"min_prep_time"`
+	MaxPrepTime           int           `mapstructure:"max_prep_time"`
+	MinRating             float64       `mapstructure:"min_rating"`
+	MaxRating             float64       `mapstructure:"max_rating"`
+	MaxInitialRatings     float64       `mapstructure:"max_initial_ratings"`
+	MinEfficiency         float64       `mapstructure:"min_efficiency"`
+	MaxEfficiency         float64       `mapstructure:"max_efficiency"`
+	MinCapacity           int           `mapstructure:"min_capacity"`
+	MaxCapacity           int           `mapstructure:"max_capacity"`
+	TaxRate               float64       `mapstructure:"tax_rate"`
+	ServiceFeePercentage  float64       `mapstructure:"service_fee_percentage"`
+	DiscountPercentage    float64       `mapstructure:"discount_percentage"`
+	MinOrderForDiscount   float64       `mapstructure:"min_order_for_discount"`
+	MaxDiscountAmount     float64       `mapstructure:"max_discount_amount"`
+	BaseDeliveryFee       float64       `mapstructure:"base_delivery_fee"`
+	FreeDeliveryThreshold float64       `mapstructure:"free_delivery_threshold"`
+	SmallOrderThreshold   float64       `mapstructure:"small_order_threshold"`
+	SmallOrderFee         float64       `mapstructure:"small_order_fee"`
+	RestaurantRatingAlpha float64       `mapstructure:"restaurant_rating_alpha"`
+	PartnerRatingAlpha    float64       `mapstructure:"partner_rating_alpha"`
+	ReviewGenerationDelay time.Duration `mapstructure:"review_generation_delay"` // How many minutes to wait before leaving a review
+	ReviewData            []ReviewData  `mapstructure:"review_data"`
 
 	NearLocationThreshold float64 `mapstructure:"near_location_threshold"`
 	CityLat               float64 `mapstructure:"city_latitude"`
 	CityLon               float64 `mapstructure:"city_longitude"`
 	UrbanRadius           float64 `mapstructure:"urban_radius"`
 	HotspotRadius         float64 `mapstructure:"hotspot_radius"`
-	PartnerMoveSpeed      float64 `mapstructure:"partner_move_speed"`   // km per time unit
-	LocationPrecision     float64 `mapstructure:"location_precision"`   // For isAtLocation
-	UserBehaviorWindow    int     `mapstructure:"user_behavior_window"` // Number of orders to consider for adjusting frequency
+	PartnerMoveSpeed      float64 `mapstructure:"partner_move_speed"`    // km per time unit
+	LocationPrecision     float64 `mapstructure:"location_precision"`    // For isAtLocation
+	UserBehaviourWindow   int     `mapstructure:"user_behaviour_window"` // Number of orders to consider for adjusting frequency
 	RestaurantLoadFactor  float64 `mapstructure:"restaurant_load_factor"`
 	EfficiencyAdjustRate  float64 `mapstructure:"efficiency_adjust_rate"`
 }

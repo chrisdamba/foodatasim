@@ -20,4 +20,5 @@ type Order struct {
 	Status                string    `json:"status"`         // e.g., "placed", "preparing", "in_transit", "delivered", "cancelled"
 	PaymentMethod         string    `json:"payment_method"` // e.g., "card", "cash", "wallet"
 	Address               Address   `json:"delivery_address"`
+	ReviewGenerated       bool      `json:"review_generated"`
 }

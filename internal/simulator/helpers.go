@@ -7,7 +7,6 @@ import (
 	"github.com/lucsky/cuid"
 	"log"
 	"math"
-	"math/rand"
 	"sort"
 	"strings"
 	"time"
@@ -41,22 +40,25 @@ func (s *Simulator) updateUserBehaviour() {
 
 func (s *Simulator) generateReviews() {
 	for _, order := range s.Orders {
-		if order.Status == "delivered" && s.shouldGenerateReview(order) {
-			review := s.createReview(order)
+		if order.Status == "delivered" && s.shouldGenerateReview(&order) {
+			review := s.createReview(&order)
 			s.Reviews = append(s.Reviews, review)
 			s.updateRatings(review)
 		}
 	}
 }
 
-func (s *Simulator) shouldGenerateReview(order models.Order) bool {
-	fake := faker.New()
+func (s *Simulator) shouldGenerateReview(order *models.Order) bool {
+	// if a review has already been generated for this order, don't generate another
+	if order.ReviewGenerated {
+		return false
+	}
 
-	// Base probability of generating a review
+	// base probability of generating a review
 	baseProbability := 0.3
 
-	// Adjust probability based on order total amount
-	// Higher value orders are more likely to receive a review
+	// adjust probability based on order total amount
+	// higher value orders are more likely to receive a review
 	if order.TotalAmount > 50 {
 		baseProbability += 0.1
 	} else if order.TotalAmount < 20 {
@@ -88,14 +90,30 @@ func (s *Simulator) shouldGenerateReview(order models.Order) bool {
 	baseProbability = math.Max(0, math.Min(1, baseProbability))
 
 	// Generate a random number and compare with the calculated probability
-	return fake.Float64(2, 0, 100)/100 < baseProbability
+	return s.Rng.Float64() < baseProbability
 }
 
-func (s *Simulator) createReview(order models.Order) models.Review {
-	fake := faker.New()
-	foodRating := generateRating()
-	deliveryRating := generateRating()
+func (s *Simulator) createReview(order *models.Order) models.Review {
+	// select a random review from our data for the food rating and comment
+	reviewData := s.Config.ReviewData[s.Rng.Intn(len(s.Config.ReviewData))]
+
+	// generate food rating based on whether the review was liked or not
+	var foodRating float64
+	if reviewData.Liked {
+		foodRating = 3 + s.Rng.Float64()*2 // Random rating between 3 and 5
+	} else {
+		foodRating = 1 + s.Rng.Float64()*2 // Random rating between 1 and 3
+	}
+
+	// calculate delivery rating based on delivery performance
+	deliveryRating := s.calculateDeliveryRating(order)
+
+	// calculate overall rating
 	overallRating := (foodRating + deliveryRating) / 2
+
+	// adjust the comment to include delivery feedback
+	comment := s.adjustCommentWithDeliveryFeedback(reviewData.Comment, deliveryRating)
+
 	return models.Review{
 		ID:                generateID(),
 		OrderID:           order.ID,
@@ -104,8 +122,8 @@ func (s *Simulator) createReview(order models.Order) models.Review {
 		DeliveryPartnerID: order.DeliveryPartnerID,
 		FoodRating:        foodRating,
 		DeliveryRating:    deliveryRating,
-		OverallRating:     generateRating(),
-		Comment:           generateComment(&fake, overallRating),
+		OverallRating:     overallRating,
+		Comment:           comment,
 		CreatedAt:         s.CurrentTime,
 		UpdatedAt:         s.CurrentTime,
 		IsIgnored:         false,
@@ -113,15 +131,83 @@ func (s *Simulator) createReview(order models.Order) models.Review {
 }
 
 func (s *Simulator) updateRatings(review models.Review) {
-	// Update restaurant rating
+	// update restaurant rating
 	restaurant := s.getRestaurant(review.RestaurantID)
 	restaurant.Rating = updateRating(restaurant.Rating, review.FoodRating, s.Config.RestaurantRatingAlpha)
 	restaurant.TotalRatings++
 
-	// Update delivery partner rating
+	// update delivery partner rating
 	partner := s.getDeliveryPartner(review.DeliveryPartnerID)
 	partner.Rating = updateRating(partner.Rating, review.DeliveryRating, s.Config.PartnerRatingAlpha)
 	partner.TotalRatings++
+}
+
+func (s *Simulator) calculateDeliveryRating(order *models.Order) float64 {
+	estimatedDeliveryTime := order.EstimatedDeliveryTime.Sub(order.OrderPlacedAt)
+	actualDeliveryTime := order.ActualDeliveryTime.Sub(order.OrderPlacedAt)
+
+	// calculate the difference between actual and estimated delivery time
+	timeDifference := actualDeliveryTime - estimatedDeliveryTime
+
+	// convert time difference to minutes
+	minutesDifference := timeDifference.Minutes()
+
+	// calculate base rating
+	var baseRating float64
+	switch {
+	case minutesDifference <= -10: // More than 10 minutes early
+		baseRating = 5.0
+	case minutesDifference <= 0: // Up to 10 minutes early
+		baseRating = 4.5
+	case minutesDifference <= 10: // Up to 10 minutes late
+		baseRating = 4.0
+	case minutesDifference <= 20: // 10-20 minutes late
+		baseRating = 3.0
+	case minutesDifference <= 30: // 20-30 minutes late
+		baseRating = 2.0
+	default: // More than 30 minutes late
+		baseRating = 1.0
+	}
+
+	// add some randomness (±0.5 stars)
+	rating := baseRating + (s.Rng.Float64() - 0.5)
+
+	// ensure rating is between 1 and 5
+	return math.Max(1, math.Min(5, rating))
+}
+
+func (s *Simulator) adjustCommentWithDeliveryFeedback(originalComment string, deliveryRating float64) string {
+	deliveryComments := []string{
+		"Delivery was lightning fast! ",
+		"Arrived earlier than expected. ",
+		"Delivery was on time. ",
+		"Delivery was a bit slow. ",
+		"The wait for delivery was too long. ",
+		"Extremely slow delivery. ",
+	}
+
+	var deliveryComment string
+	switch {
+	case deliveryRating >= 4.5:
+		deliveryComment = deliveryComments[0]
+	case deliveryRating >= 4.0:
+		deliveryComment = deliveryComments[1]
+	case deliveryRating >= 3.5:
+		deliveryComment = deliveryComments[2]
+	case deliveryRating >= 2.5:
+		deliveryComment = deliveryComments[3]
+	case deliveryRating >= 1.5:
+		deliveryComment = deliveryComments[4]
+	default:
+		deliveryComment = deliveryComments[5]
+	}
+
+	// randomly decide whether to prepend or append the delivery comment
+	if s.Rng.Float64() < 0.5 {
+		return deliveryComment + originalComment
+	} else {
+		return originalComment + " " + deliveryComment
+	}
 }
 
 func (s *Simulator) updateRestaurantStatus() {
@@ -408,14 +494,14 @@ func (s *Simulator) updateOrderStatuses() {
 					Type: models.EventDeliverOrder,
 					Data: &s.Orders[i],
 				})
-				// Schedule review creation for later
+				// schedule review creation for later
 				s.EventQueue.Enqueue(&models.Event{
-					Time: s.CurrentTime.Add(30 * time.Minute), // Assume user leaves review after 30 minutes
+					Time: s.CurrentTime.Add(30 * time.Minute), // assume user leaves review after 30 minutes
 					Type: models.EventGenerateReview,
 					Data: &s.Orders[i],
 				})
 			} else if s.Orders[i].Status != models.OrderStatusInTransit {
-				// Order is just starting transit
+				// order is just starting transit
 				s.Orders[i].Status = models.OrderStatusInTransit
 				s.Orders[i].InTransitTime = s.CurrentTime
 				s.EventQueue.Enqueue(&models.Event{
@@ -423,6 +509,13 @@ func (s *Simulator) updateOrderStatuses() {
 					Type: models.EventOrderInTransit,
 					Data: &s.Orders[i],
 				})
+			}
+		case models.OrderStatusDelivered:
+			// check if it's time to generate a review
+			if s.CurrentTime.Sub(s.Orders[i].ActualDeliveryTime) >= s.Config.ReviewGenerationDelay {
+				if s.shouldGenerateReview(&order) {
+					s.handleGenerateReview(&order)
+				}
 			}
 		}
 	}
@@ -516,13 +609,19 @@ func (s *Simulator) getPartnerCurrentOrder(partner *models.DeliveryPartner) *mod
 
 func (s *Simulator) assignDeliveryPartner(order *models.Order) {
 	restaurant := s.getRestaurant(order.RestaurantID)
+	if restaurant == nil {
+		log.Printf("Error: Restaurant not found for order %s", order.ID)
+		return
+	}
 	availablePartners := s.getAvailablePartnersNear(restaurant.Location)
+	log.Printf("Attempting to assign partner for order %s. Available partners: %d", order.ID, len(availablePartners))
 	if len(availablePartners) > 0 {
 		selectedPartner := availablePartners[s.Rng.Intn(len(availablePartners))]
 		order.DeliveryPartnerID = selectedPartner.ID
 		partnerIndex := s.getPartnerIndex(selectedPartner.ID)
 		s.DeliveryPartners[partnerIndex].Status = models.PartnerStatusEnRoutePickup
 		s.notifyDeliveryPartner(selectedPartner, order)
+		log.Printf("Assigned partner %s to order %s", selectedPartner.ID, order.ID)
 	} else {
 		// If no partners are available, schedule a retry
 		retryTime := s.CurrentTime.Add(5 * time.Minute)
@@ -549,10 +648,13 @@ func (s *Simulator) getAvailablePartnersNear(location models.Location) []*models
 	availablePartners := make([]*models.DeliveryPartner, 0)
 	for i := range s.DeliveryPartners {
 		partner := s.DeliveryPartners[i]
-		if partner.Status == "available" && s.isNearLocation(partner.CurrentLocation, location) {
+		isNear := s.isNearLocation(partner.CurrentLocation, location)
+		log.Printf("Partner %s status: %s, isNear: %v", partner.ID, partner.Status, isNear)
+		if partner.Status == models.PartnerStatusAvailable && isNear {
 			availablePartners = append(availablePartners, partner)
 		}
 	}
+	log.Printf("Found %d available partners near location %v", len(availablePartners), location)
 	return availablePartners
 }
 
@@ -608,12 +710,17 @@ func (s *Simulator) updateDeliveryPartnerLocations() {
 				}
 			}
 		case models.PartnerStatusEnRouteDelivery:
+			// check if the delivery is complete
 			order := s.getPartnerCurrentOrder(partner)
 			if order != nil {
 				user := s.getUser(order.CustomerID)
 				if user != nil {
 					newLocation = s.moveTowards(partner.CurrentLocation, user.Location)
 					locationUpdated = true
+					if s.isAtLocation(partner.CurrentLocation, user.Location) {
+						partner.Status = models.PartnerStatusAvailable
+						log.Printf("Partner %s completed delivery and is now available", partner.ID)
+					}
 				}
 			}
 		}
@@ -1003,20 +1110,20 @@ func (s *Simulator) estimatePrepTime(restaurant *models.Restaurant, items []stri
 func (s *Simulator) isNearLocation(loc1, loc2 models.Location) bool {
 	distance := s.calculateDistance(loc1, loc2)
 
-	// Base threshold
+	// base threshold
 	threshold := s.Config.NearLocationThreshold
 
-	// Adjust threshold based on time of day (e.g., wider range during off-peak hours)
+	// adjust threshold based on time of day (e.g., wider range during off-peak hours)
 	if !s.isPeakHour(s.CurrentTime) {
 		threshold *= 1.5
 	}
 
-	// Adjust threshold based on urban density
+	// adjust threshold based on urban density
 	if s.isUrbanArea(loc1) && s.isUrbanArea(loc2) {
-		threshold *= 0.8 // Smaller threshold in urban areas
+		threshold *= 0.8 // smaller threshold in urban areas
 	}
 
-	return distance <= threshold
+	return distance <= threshold*2
 }
 
 func (s *Simulator) isUrbanArea(loc models.Location) bool {
@@ -1099,25 +1206,46 @@ func (s *Simulator) isAtLocation(loc1, loc2 models.Location) bool {
 }
 
 func (s *Simulator) adjustOrderFrequency(user *models.User) float64 {
-	recentOrders := s.getRecentOrders(user.ID, s.Config.UserBehaviorWindow)
-	if len(recentOrders) == 0 {
-		return user.OrderFrequency // No recent orders, no change
+	recentOrders := s.getRecentOrders(user.ID, s.Config.UserBehaviourWindow)
+	if len(recentOrders) <= 1 {
+		return user.OrderFrequency // No change if there's 0 or 1 recent order
 	}
 
-	// Calculate time between orders
+	// calculate time between orders
 	var totalTimeBetween float64
 	for i := 1; i < len(recentOrders); i++ {
 		timeBetween := recentOrders[i].OrderPlacedAt.Sub(recentOrders[i-1].OrderPlacedAt).Hours()
 		totalTimeBetween += timeBetween
 	}
+
+	// avoid division by zero
+	if totalTimeBetween == 0 {
+		return user.OrderFrequency // No change if all orders were placed at the same time
+	}
+
 	avgTimeBetween := totalTimeBetween / float64(len(recentOrders)-1)
 
-	// Convert to frequency (orders per day)
+	// avoid division by zero
+	if avgTimeBetween == 0 {
+		return user.OrderFrequency // No change if average time between orders is zero
+	}
+
+	// convert to frequency (orders per day)
 	newFrequency := 24 / avgTimeBetween
 
-	// Gradually adjust towards new frequency
+	// check for unreasonably high frequencies
+	if newFrequency > 24 { // More than 24 orders per day seems unrealistic
+		newFrequency = 24
+	}
+
+	// gradually adjust towards new frequency
 	adjustmentRate := 0.2 // 20% adjustment towards new frequency
-	return user.OrderFrequency + (newFrequency-user.OrderFrequency)*adjustmentRate
+	adjustedFrequency := user.OrderFrequency + (newFrequency-user.OrderFrequency)*adjustmentRate
+
+	// ensure the frequency is within a reasonable range
+	minFrequency := 0.01 // at least one order every 100 days
+	maxFrequency := 5.0  // at most 5 orders per day
+	return math.Max(minFrequency, math.Min(maxFrequency, adjustedFrequency))
 }
 
 func (s *Simulator) adjustPrepTime(restaurant *models.Restaurant) float64 {
@@ -1218,74 +1346,6 @@ func generateTrafficDensity(hour int) float64 {
 
 func generateID() string {
 	return cuid.New()
-}
-
-func generateRating() float64 {
-	// Generate a rating between 1 and 5, with a bias towards higher ratings
-	x := rand.Float64()
-	return 1.0 + 4.0*math.Pow(x, 2)
-}
-
-func generateComment(fake *faker.Faker, rating float64) string {
-	// Define comment templates based on rating ranges
-	excellentComments := []string{
-		"Absolutely delicious! The food was outstanding.",
-		"Fantastic service and the meal was top-notch.",
-		"Best order I've had in a while. Highly recommend!",
-		"Speedy delivery and the food was perfect.",
-		"Five stars! The meal exceeded my expectations.",
-	}
-
-	goodComments := []string{
-		"Enjoyed the food. Delivery was on time.",
-		"Good meal and friendly service.",
-		"Solid choice. Will order again.",
-		"Pretty good food. No complaints.",
-		"The order was tasty. Delivery was quick.",
-	}
-
-	averageComments := []string{
-		"The food was okay. Nothing special.",
-		"Decent meal, but delivery took longer than expected.",
-		"Average experience. Food could be better.",
-		"The order was alright. Might try something else next time.",
-		"Not bad, not great. Just okay.",
-	}
-
-	poorComments := []string{
-		"Disappointed with the food. Not as described.",
-		"The meal was cold when it arrived.",
-		"Long wait for mediocre food.",
-		"Wouldn't recommend. Below average.",
-		"Poor quality. Expected better.",
-	}
-
-	// Select comment template based on rating
-	var comment string
-	switch {
-	case rating >= 4.5:
-		comment = fake.RandomStringElement(excellentComments)
-	case rating >= 3.5:
-		comment = fake.RandomStringElement(goodComments)
-	case rating >= 2.5:
-		comment = fake.RandomStringElement(averageComments)
-	default:
-		comment = fake.RandomStringElement(poorComments)
-	}
-
-	// Optionally add an adjective
-	if fake.Bool() {
-		adjectives := []string{"delicious", "tasty", "flavorful", "mouthwatering", "satisfying", "disappointing", "bland", "mediocre"}
-		comment = fake.RandomStringElement(adjectives) + " " + comment
-	}
-
-	// Optionally add an emoji
-	if fake.Bool() {
-		emojis := []string{"😋", "👍", "🍽️", "🌟", "😊", "🍕", "🍔", "🍜", "🍣", "🍱"}
-		comment += " " + fake.RandomStringElement(emojis)
-	}
-
-	return comment
 }
 
 func degreesToRadians(degrees float64) float64 {

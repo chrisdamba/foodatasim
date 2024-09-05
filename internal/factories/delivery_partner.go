@@ -4,17 +4,23 @@ import (
 	"github.com/chrisdamba/foodatasim/internal/models"
 	"github.com/lucsky/cuid"
 	"math"
+	"math/rand"
 )
 
 type DeliveryPartnerFactory struct{}
 
 func (df *DeliveryPartnerFactory) CreateDeliveryPartner(config *models.Config) *models.DeliveryPartner {
-	// Calculate city bounds
+	// calculate city bounds
 	latRange := config.UrbanRadius / 111.0 // Approx. conversion from km to degrees
 	lonRange := latRange / math.Cos(config.CityLat*math.Pi/180.0)
 
-	lat := fake.Float64(6, int(config.CityLat-latRange), int(config.CityLat+latRange))
-	lon := fake.Float64(6, int(config.CityLon-lonRange), int(config.CityLon+lonRange))
+	// generate random offsets within the urban radius
+	latOffset := (rand.Float64()*2 - 1) * latRange
+	lonOffset := (rand.Float64()*2 - 1) * lonRange
+
+	// calculate final latitude and longitude
+	lat := config.CityLat + latOffset
+	lon := config.CityLon + lonOffset
 
 	return &models.DeliveryPartner{
 		ID:           cuid.New(),
@@ -29,6 +35,7 @@ func (df *DeliveryPartnerFactory) CreateDeliveryPartner(config *models.Config) *
 			Lat: lat,
 			Lon: lon,
 		},
-		Status: "available",
+		Status:         models.PartnerStatusAvailable,
+		LastUpdateTime: config.StartDate,
 	}
 }

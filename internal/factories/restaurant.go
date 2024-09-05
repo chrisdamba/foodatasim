@@ -10,13 +10,17 @@ import (
 type RestaurantFactory struct{}
 
 func (rf *RestaurantFactory) CreateRestaurant(config *models.Config) *models.Restaurant {
-
-	// Use config to determine location within the city bounds
+	// calculate city bounds
 	latRange := config.UrbanRadius / 111.0 // Approx. conversion from km to degrees
 	lonRange := latRange / math.Cos(config.CityLat*math.Pi/180.0)
 
-	lat := fake.Float64(6, int(config.CityLat-latRange), int(config.CityLat+latRange))
-	lon := fake.Float64(6, int(config.CityLon-lonRange), int(config.CityLon+lonRange))
+	// generate random offsets within the urban radius
+	latOffset := (rand.Float64()*2 - 1) * latRange
+	lonOffset := (rand.Float64()*2 - 1) * lonRange
+
+	// calculate final latitude and longitude
+	lat := config.CityLat + latOffset
+	lon := config.CityLon + lonOffset
 
 	// Use config for time-related fields
 	avgPrepTime := fake.Float64(0, config.MinPrepTime, config.MaxPrepTime)

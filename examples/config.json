@@ -2,9 +2,9 @@
   "seed": 42,
   "start_date": "2024-05-01T00:00:00Z",
   "end_date": "2024-07-01T00:00:00Z",
-  "initial_users": 1000,
-  "initial_restaurants": 100,
-  "initial_partners": 50,
+  "initial_users": 5000,
+  "initial_restaurants": 500,
+  "initial_partners": 250,
   "user_growth_rate": 0.01,
   "partner_growth_rate": 0.02,
   "order_frequency": 0.1,
@@ -44,7 +44,7 @@
   "hotspot_radius": 2.0,
   "partner_move_speed": 20.0,
   "location_precision": 0.0001,
-  "user_behavior_window": 10,
+  "user_behaviour_window": 10,
   "restaurant_load_factor": 0.2,
   "efficiency_adjust_rate": 0.1
 }
