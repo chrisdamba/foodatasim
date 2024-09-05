@@ -23,7 +23,10 @@ var rootCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
 			os.Exit(1)
 		}
-
+		err = cfg.LoadReviewData("data/restaurant_reviews.tsv")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading review data: %v", err)
+		}
 		sim := simulator.NewSimulator(cfg)
 		sim.Run()
 	},

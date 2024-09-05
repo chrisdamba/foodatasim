@@ -170,6 +170,8 @@ func (s *Simulator) processEvent(event *models.Event) {
 		s.handleAssignDeliveryPartner(event)
 	case models.EventUpdatePartnerLocation:
 		s.handleUpdatePartnerLocation(event.Data.(*models.PartnerLocationUpdate))
+	case models.EventOrderInTransit:
+		s.handleOrderInTransit(event.Data.(*models.Order))
 	case models.EventDeliverOrder:
 		s.handleDeliverOrder(event.Data.(*models.Order))
 	case models.EventCancelOrder:
@@ -421,14 +423,50 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			OrderID      string          `json:"orderId,omitempty"`
 			NewLocation  models.Location `json:"newLocation"`
 			CurrentOrder string          `json:"currentOrder,omitempty"`
+			Status       string          `json:"status"`
+			UpdateTime   int64           `json:"updateTime"`
+			Speed        float64         `json:"speed,omitempty"`
 		}{
 			BaseEvent:    baseEvent,
 			PartnerID:    update.PartnerID,
 			OrderID:      update.OrderID,
 			NewLocation:  update.NewLocation,
 			CurrentOrder: partner.CurrentOrderID,
+			Status:       partner.Status,
+			UpdateTime:   s.CurrentTime.Unix(),
+			Speed:        update.Speed,
 		}
 		topic = "partner_location_events"
+
+	case models.EventOrderInTransit:
+		order := event.Data.(*models.Order)
+		partner := s.getDeliveryPartner(order.DeliveryPartnerID)
+		if partner == nil {
+			return models.EventMessage{}, fmt.Errorf("delivery partner not found for order %s", order.ID)
+		}
+
+		eventData = struct {
+			BaseEvent
+			OrderID               string          `json:"orderId"`
+			DeliveryPartnerID     string          `json:"deliveryPartnerId"`
+			RestaurantID          string          `json:"restaurantId"`
+			CustomerID            string          `json:"customerId"`
+			CurrentLocation       models.Location `json:"currentLocation"`
+			EstimatedDeliveryTime int64           `json:"estimatedDeliveryTime"`
+			PickupTime            int64           `json:"pickupTime"`
+			Status                string          `json:"status"`
+		}{
+			BaseEvent:             baseEvent,
+			OrderID:               order.ID,
+			DeliveryPartnerID:     order.DeliveryPartnerID,
+			RestaurantID:          order.RestaurantID,
+			CustomerID:            order.CustomerID,
+			CurrentLocation:       partner.CurrentLocation,
+			EstimatedDeliveryTime: order.EstimatedDeliveryTime.Unix(),
+			PickupTime:            order.PickupTime.Unix(),
+			Status:                order.Status,
+		}
+		topic = "order_in_transit_events"
 
 	case models.EventDeliverOrder:
 		order := event.Data.(*models.Order)
@@ -491,7 +529,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		}
 
 		eventData = userBehaviorEvent
-		topic = "user_behavior_events"
+		topic = "user_behaviour_events"
 
 	case models.EventUpdateRestaurantStatus:
 		restaurant := event.Data.(*models.Restaurant)
@@ -819,6 +857,28 @@ func (s *Simulator) handleUpdatePartnerLocation(update *models.PartnerLocationUp
 	if partner != nil {
 		partner.CurrentLocation = update.NewLocation
 	}
+}
+
+func (s *Simulator) handleOrderInTransit(order *models.Order) {
+	partner := s.getDeliveryPartner(order.DeliveryPartnerID)
+	if partner == nil {
+		log.Printf("Error: Delivery partner not found for order %s", order.ID)
+		return
+	}
+
+	order.Status = models.OrderStatusInTransit
+	order.InTransitTime = s.CurrentTime
+	order.EstimatedDeliveryTime = s.estimateDeliveryTime(partner, order)
+
+	// Enqueue the OrderInTransit event
+	s.EventQueue.Enqueue(&models.Event{
+		Time: s.CurrentTime,
+		Type: models.EventOrderInTransit,
+		Data: order,
+	})
+
+	log.Printf("Order %s is now in transit. Estimated delivery time: %s",
+		order.ID, order.EstimatedDeliveryTime.Format(time.RFC3339))
 }
 
 func (s *Simulator) handleDeliverOrder(order *models.Order) {

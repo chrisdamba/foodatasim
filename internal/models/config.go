@@ -1,12 +1,21 @@
 package models
 
 import (
+	"encoding/csv"
 	"fmt"
+	"io"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/viper"
 )
+
+type ReviewData struct {
+	Comment string `mapstructure:"comment"`
+	Liked   bool   `mapstructure:"liked"`
+}
 
 type Config struct {
 	Seed               int       `mapstructure:"seed"`
@@ -26,28 +35,29 @@ type Config struct {
 	OutputFile         string    `mapstructure:"output_file_path"`
 	Continuous         bool      `mapstructure:"continuous"`
 	// Additional fields
-	CityName              string  `mapstructure:"city_name"`
-	DefaultCurrency       int     `mapstructure:"default_currency"`
-	MinPrepTime           int     `mapstructure:"min_prep_time"`
-	MaxPrepTime           int     `mapstructure:"max_prep_time"`
-	MinRating             float64 `mapstructure:"min_rating"`
-	MaxRating             float64 `mapstructure:"max_rating"`
-	MaxInitialRatings     float64 `mapstructure:"max_initial_ratings"`
-	MinEfficiency         float64 `mapstructure:"min_efficiency"`
-	MaxEfficiency         float64 `mapstructure:"max_efficiency"`
-	MinCapacity           int     `mapstructure:"min_capacity"`
-	MaxCapacity           int     `mapstructure:"max_capacity"`
-	TaxRate               float64 `mapstructure:"tax_rate"`
-	ServiceFeePercentage  float64 `mapstructure:"service_fee_percentage"`
-	DiscountPercentage    float64 `mapstructure:"discount_percentage"`
-	MinOrderForDiscount   float64 `mapstructure:"min_order_for_discount"`
-	MaxDiscountAmount     float64 `mapstructure:"max_discount_amount"`
-	BaseDeliveryFee       float64 `mapstructure:"base_delivery_fee"`
-	FreeDeliveryThreshold float64 `mapstructure:"free_delivery_threshold"`
-	SmallOrderThreshold   float64 `mapstructure:"small_order_threshold"`
-	SmallOrderFee         float64 `mapstructure:"small_order_fee"`
-	RestaurantRatingAlpha float64 `mapstructure:"restaurant_rating_alpha"`
-	PartnerRatingAlpha    float64 `mapstructure:"partner_rating_alpha"`
+	CityName              string       `mapstructure:"city_name"`
+	DefaultCurrency       int          `mapstructure:"default_currency"`
+	MinPrepTime           int          `mapstructure:"min_prep_time"`
+	MaxPrepTime           int          `mapstructure:"max_prep_time"`
+	MinRating             float64      `mapstructure:"min_rating"`
+	MaxRating             float64      `mapstructure:"max_rating"`
+	MaxInitialRatings     float64      `mapstructure:"max_initial_ratings"`
+	MinEfficiency         float64      `mapstructure:"min_efficiency"`
+	MaxEfficiency         float64      `mapstructure:"max_efficiency"`
+	MinCapacity           int          `mapstructure:"min_capacity"`
+	MaxCapacity           int          `mapstructure:"max_capacity"`
+	TaxRate               float64      `mapstructure:"tax_rate"`
+	ServiceFeePercentage  float64      `mapstructure:"service_fee_percentage"`
+	DiscountPercentage    float64      `mapstructure:"discount_percentage"`
+	MinOrderForDiscount   float64      `mapstructure:"min_order_for_discount"`
+	MaxDiscountAmount     float64      `mapstructure:"max_discount_amount"`
+	BaseDeliveryFee       float64      `mapstructure:"base_delivery_fee"`
+	FreeDeliveryThreshold float64      `mapstructure:"free_delivery_threshold"`
+	SmallOrderThreshold   float64      `mapstructure:"small_order_threshold"`
+	SmallOrderFee         float64      `mapstructure:"small_order_fee"`
+	RestaurantRatingAlpha float64      `mapstructure:"restaurant_rating_alpha"`
+	PartnerRatingAlpha    float64      `mapstructure:"partner_rating_alpha"`
+	ReviewData            []ReviewData `mapstructure:"review_data"`
 
 	NearLocationThreshold float64 `mapstructure:"near_location_threshold"`
 	CityLat               float64 `mapstructure:"city_latitude"`
@@ -93,4 +103,34 @@ func LoadConfig(cfgFile string) (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+func (cfg *Config) LoadReviewData(filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.Comma = '\t'
+	reader.Read()
+
+	for {
+		fields, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		liked, _ := strconv.ParseBool(fields[1])
+		review := ReviewData{
+			Comment: fields[0],
+			Liked:   liked,
+		}
+		cfg.ReviewData = append(cfg.ReviewData, review)
+	}
+
+	return nil
 }

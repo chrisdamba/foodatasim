@@ -588,33 +588,20 @@ func (s *Simulator) notifyDeliveryPartner(partner *models.DeliveryPartner, order
 
 func (s *Simulator) updateDeliveryPartnerLocations() {
 	for i, partner := range s.DeliveryPartners {
+		var newLocation models.Location
+		var locationUpdated bool
+		var speed float64
 		switch partner.Status {
 		case models.PartnerStatusAvailable:
-			newLocation := s.moveTowardsHotspot(partner)
-			s.DeliveryPartners[i].CurrentLocation = newLocation
-			s.EventQueue.Enqueue(&models.Event{
-				Time: s.CurrentTime,
-				Type: models.EventUpdatePartnerLocation,
-				Data: &models.PartnerLocationUpdate{
-					PartnerID:   partner.ID,
-					NewLocation: newLocation,
-				},
-			})
+			newLocation = s.moveTowardsHotspot(partner)
+			locationUpdated = true
 		case models.PartnerStatusEnRoutePickup:
 			order := s.getPartnerCurrentOrder(partner)
 			if order != nil {
 				restaurant := s.getRestaurant(order.RestaurantID)
 				if restaurant != nil {
-					newLocation := s.moveTowards(partner.CurrentLocation, restaurant.Location)
-					s.DeliveryPartners[i].CurrentLocation = newLocation
-					s.EventQueue.Enqueue(&models.Event{
-						Time: s.CurrentTime,
-						Type: models.EventUpdatePartnerLocation,
-						Data: &models.PartnerLocationUpdate{
-							PartnerID:   partner.ID,
-							NewLocation: newLocation,
-						},
-					})
+					newLocation = s.moveTowards(partner.CurrentLocation, restaurant.Location)
+					locationUpdated = true
 					if s.isAtLocation(partner.CurrentLocation, restaurant.Location) {
 						s.DeliveryPartners[i].Status = models.PartnerStatusWaitingForPickup
 					}
@@ -625,18 +612,33 @@ func (s *Simulator) updateDeliveryPartnerLocations() {
 			if order != nil {
 				user := s.getUser(order.CustomerID)
 				if user != nil {
-					newLocation := s.moveTowards(partner.CurrentLocation, user.Location)
-					s.EventQueue.Enqueue(&models.Event{
-						Time: s.CurrentTime,
-						Type: models.EventUpdatePartnerLocation,
-						Data: &models.PartnerLocationUpdate{
-							PartnerID:   partner.ID,
-							NewLocation: newLocation,
-						},
-					})
-					s.DeliveryPartners[i].CurrentLocation = newLocation
+					newLocation = s.moveTowards(partner.CurrentLocation, user.Location)
+					locationUpdated = true
 				}
 			}
+		}
+
+		if locationUpdated {
+			timeDiff := s.CurrentTime.Sub(partner.LastUpdateTime).Hours()
+			if timeDiff > 0 {
+				distance := s.calculateDistance(partner.CurrentLocation, newLocation)
+				speed = distance / timeDiff
+			}
+
+			s.DeliveryPartners[i].CurrentLocation = newLocation
+			s.DeliveryPartners[i].Speed = speed
+			s.DeliveryPartners[i].LastUpdateTime = s.CurrentTime
+
+			s.EventQueue.Enqueue(&models.Event{
+				Time: s.CurrentTime,
+				Type: models.EventUpdatePartnerLocation,
+				Data: &models.PartnerLocationUpdate{
+					PartnerID:   partner.ID,
+					NewLocation: newLocation,
+					Speed:       speed,
+					OrderID:     s.DeliveryPartners[i].CurrentOrderID,
+				},
+			})
 		}
 	}
 }

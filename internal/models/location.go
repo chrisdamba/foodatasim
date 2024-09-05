@@ -15,4 +15,5 @@ type PartnerLocationUpdate struct {
 	PartnerID   string
 	OrderID     string
 	NewLocation Location
+	Speed       float64
 }

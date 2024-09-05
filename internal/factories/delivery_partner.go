@@ -24,6 +24,7 @@ func (df *DeliveryPartnerFactory) CreateDeliveryPartner(config *models.Config) *
 		TotalRatings: fake.Float64(0, 0, 500),
 		Experience:   fake.Float64(2, 0, 100) / 100,
 		AvgSpeed:     fake.Float64(1, 20, 60),
+		Speed:        fake.Float64(1, 20, 60),
 		CurrentLocation: models.Location{
 			Lat: lat,
 			Lon: lon,
