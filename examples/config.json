@@ -11,7 +11,7 @@
   "peak_hour_factor": 1.5,
   "weekend_factor": 1.2,
   "traffic_variability": 0.2,
-  "kafka_enabled": false,
+  "kafka_enabled": true,
   "kafka_broker_list": "localhost:9092",
   "output_file_path": "",
   "continuous": false,

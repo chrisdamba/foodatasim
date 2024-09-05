@@ -253,10 +253,27 @@ func (s *Simulator) simulateTimeStep() {
 	s.updateRestaurantStatus()
 }
 
+func createKafkaProducer(brokerList []string) (sarama.SyncProducer, error) {
+	config := sarama.NewConfig()
+	config.Producer.RequiredAcks = sarama.WaitForAll
+	config.Producer.Retry.Max = 5
+	config.Producer.Retry.Backoff = 100 * time.Millisecond
+	config.Producer.Return.Successes = true
+	config.Net.DialTimeout = 30 * time.Second
+	config.Net.ReadTimeout = 30 * time.Second
+	config.Net.WriteTimeout = 30 * time.Second
+
+	producer, err := sarama.NewSyncProducer(brokerList, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Kafka producer: %w", err)
+	}
+	return producer, nil
+}
+
 func (s *Simulator) determineOutputDestination() OutputDestination {
 	if s.Config.KafkaEnabled {
 		brokerList := strings.Split(s.Config.KafkaBrokerList, ",")
-		producer, err := sarama.NewSyncProducer(brokerList, nil)
+		producer, err := createKafkaProducer(brokerList)
 		if err != nil {
 			log.Fatalf("Failed to create Kafka producer: %s", err)
 		}
