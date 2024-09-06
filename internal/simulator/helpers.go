@@ -451,7 +451,7 @@ func (s *Simulator) updateOrderStatuses() {
 				s.EventQueue.Enqueue(&models.Event{
 					Time: s.CurrentTime,
 					Type: models.EventPrepareOrder,
-					Data: order,
+					Data: &order,
 				})
 			}
 		case models.OrderStatusPreparing:
@@ -460,7 +460,7 @@ func (s *Simulator) updateOrderStatuses() {
 				s.EventQueue.Enqueue(&models.Event{
 					Time: s.CurrentTime,
 					Type: models.EventOrderReady,
-					Data: order,
+					Data: &order,
 				})
 			}
 		case models.OrderStatusReady:
@@ -469,7 +469,7 @@ func (s *Simulator) updateOrderStatuses() {
 				s.EventQueue.Enqueue(&models.Event{
 					Time: s.CurrentTime,
 					Type: models.EventPickUpOrder,
-					Data: order,
+					Data: &order,
 				})
 			}
 		case models.OrderStatusPickedUp:
@@ -486,7 +486,7 @@ func (s *Simulator) updateOrderStatuses() {
 			}
 
 			if s.isAtLocation(partner.CurrentLocation, user.Location) || s.isOrderDelivered(order) {
-				// Order has been delivered
+				// order has been delivered
 				s.Orders[i].Status = models.OrderStatusDelivered
 				s.Orders[i].ActualDeliveryTime = s.CurrentTime
 				s.EventQueue.Enqueue(&models.Event{
@@ -509,6 +509,22 @@ func (s *Simulator) updateOrderStatuses() {
 					Type: models.EventOrderInTransit,
 					Data: &s.Orders[i],
 				})
+			}
+		case models.OrderStatusInTransit:
+			if s.CurrentTime.After(order.EstimatedDeliveryTime) {
+				log.Printf("Order %s is past its estimated delivery time. Current time: %s, Estimated delivery time: %s",
+					order.ID, s.CurrentTime.Format(time.RFC3339), order.EstimatedDeliveryTime.Format(time.RFC3339))
+
+				s.EventQueue.Enqueue(&models.Event{
+					Time: s.CurrentTime,
+					Type: models.EventDeliverOrder,
+					Data: &order,
+				})
+
+				log.Printf("Scheduled delivery event for order %s", order.ID)
+			} else {
+				log.Printf("Order %s is still in transit. Current time: %s, Estimated delivery time: %s",
+					order.ID, s.CurrentTime.Format(time.RFC3339), order.EstimatedDeliveryTime.Format(time.RFC3339))
 			}
 		case models.OrderStatusDelivered:
 			// check if it's time to generate a review
@@ -620,10 +636,15 @@ func (s *Simulator) assignDeliveryPartner(order *models.Order) {
 		order.DeliveryPartnerID = selectedPartner.ID
 		partnerIndex := s.getPartnerIndex(selectedPartner.ID)
 		s.DeliveryPartners[partnerIndex].Status = models.PartnerStatusEnRoutePickup
+
+		// set the estimated delivery time
+		order.EstimatedDeliveryTime = s.estimateDeliveryTime(selectedPartner, order)
+
 		s.notifyDeliveryPartner(selectedPartner, order)
-		log.Printf("Assigned partner %s to order %s", selectedPartner.ID, order.ID)
+		log.Printf("Assigned partner %s to order %s. Estimated delivery time: %s",
+			selectedPartner.ID, order.ID, order.EstimatedDeliveryTime.Format(time.RFC3339))
 	} else {
-		// If no partners are available, schedule a retry
+		// if no partners are available, schedule a retry
 		retryTime := s.CurrentTime.Add(5 * time.Minute)
 		s.EventQueue.Enqueue(&models.Event{
 			Time: retryTime,
@@ -774,22 +795,22 @@ func (s *Simulator) estimateDeliveryTime(partner *models.DeliveryPartner, order 
 		return s.CurrentTime.Add(30 * time.Minute)
 	}
 
-	// Estimate time from current location to restaurant (if not already there)
+	// estimate time from current location to restaurant (if not already there)
 	timeToRestaurant := time.Duration(0)
 	if !s.isAtLocation(partner.CurrentLocation, restaurant.Location) {
 		timeToRestaurant = s.estimateArrivalTime(partner.CurrentLocation, restaurant.Location).Sub(s.CurrentTime)
 	}
 
-	// Estimate time from restaurant to user
+	// estimate time from restaurant to user
 	timeToUser := s.estimateArrivalTime(restaurant.Location, user.Location).Sub(s.CurrentTime)
 
-	// Add some buffer time for order handoff at restaurant and to customer, for finding parking space etc
+	// add some buffer time for order handoff at restaurant and to customer, for finding parking space etc
 	bufferTime := 5 * time.Minute
 
-	// Calculate total estimated time
+	// calculate total estimated time
 	totalEstimatedTime := timeToRestaurant + timeToUser + bufferTime
 
-	// Add some overall variability to account for unforeseen circumstances
+	// add some overall variability to account for unforeseen circumstances
 	variability := 0.1 // 10% variability
 	adjustedTime := time.Duration(float64(totalEstimatedTime) * (1 + (s.Rng.Float64()*2-1)*variability))
 
@@ -1383,4 +1404,11 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func safeUnixTime(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
 }

@@ -479,14 +479,16 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 
 		eventData = struct {
 			BaseEvent
-			OrderID            string `json:"orderId"`
-			Status             string `json:"status"`
-			ActualDeliveryTime int64  `json:"actual_delivery_time"`
+			OrderID               string `json:"orderId"`
+			Status                string `json:"status"`
+			EstimatedDeliveryTime int64  `json:"estimatedDeliveryTime"`
+			ActualDeliveryTime    int64  `json:"actual_delivery_time"`
 		}{
-			BaseEvent:          baseEvent,
-			OrderID:            order.ID,
-			Status:             order.Status,
-			ActualDeliveryTime: order.ActualDeliveryTime.Unix(),
+			BaseEvent:             baseEvent,
+			OrderID:               order.ID,
+			Status:                order.Status,
+			EstimatedDeliveryTime: safeUnixTime(order.EstimatedDeliveryTime),
+			ActualDeliveryTime:    safeUnixTime(order.ActualDeliveryTime),
 		}
 		topic = "order_delivery_events"
 
@@ -644,7 +646,7 @@ func (s *Simulator) handlePrepareOrder(order *models.Order) {
 
 	// Add some variability to prep time
 	variability := 0.2 // 20% variability
-	actualPrepTime := prepTime * (1 + (rand.Float64()*2-1)*variability)
+	actualPrepTime := prepTime * (1 + (s.Rng.Float64()*2-1)*variability)
 
 	// Calculate when the order will be ready
 	readyTime := s.CurrentTime.Add(time.Duration(actualPrepTime) * time.Minute)
@@ -815,25 +817,25 @@ func (s *Simulator) handlePickUpOrder(event *models.Event) {
 		return
 	}
 
-	// Update order status
+	// update order status
 	order.Status = models.OrderStatusPickedUp
 	order.PickupTime = s.CurrentTime
 
-	// Update delivery partner status
+	// update delivery partner status
 	partner.Status = models.PartnerStatusEnRouteDelivery
 
-	// Trigger the "order in transit" event
+	// trigger the "order in transit" event
 	s.EventQueue.Enqueue(&models.Event{
 		Time: s.CurrentTime,
 		Type: models.EventOrderInTransit,
 		Data: order,
 	})
 
-	// Estimate delivery time
+	// estimate delivery time
 	estimatedDeliveryTime := s.estimateDeliveryTime(partner, order)
 	order.EstimatedDeliveryTime = estimatedDeliveryTime
 
-	// Schedule delivery event
+	// schedule delivery event
 	s.EventQueue.Enqueue(&models.Event{
 		Time: estimatedDeliveryTime,
 		Type: models.EventDeliverOrder,
@@ -912,39 +914,44 @@ func (s *Simulator) handleOrderInTransit(order *models.Order) {
 		return
 	}
 
-	order.Status = models.OrderStatusInTransit
-	order.InTransitTime = s.CurrentTime
-	order.EstimatedDeliveryTime = s.estimateDeliveryTime(partner, order)
+	// ensure we're not scheduling the same event again
+	if order.Status != models.OrderStatusInTransit {
+		order.Status = models.OrderStatusInTransit
+		order.InTransitTime = s.CurrentTime
 
-	// Enqueue the OrderInTransit event
-	s.EventQueue.Enqueue(&models.Event{
-		Time: s.CurrentTime,
-		Type: models.EventOrderInTransit,
-		Data: order,
-	})
+		// schedule the delivery event
+		estimatedDeliveryTime := s.estimateDeliveryTime(partner, order)
+		s.EventQueue.Enqueue(&models.Event{
+			Time: estimatedDeliveryTime,
+			Type: models.EventDeliverOrder,
+			Data: order,
+		})
 
-	log.Printf("Order %s is now in transit. Estimated delivery time: %s",
-		order.ID, order.EstimatedDeliveryTime.Format(time.RFC3339))
+		log.Printf("Order %s is now in transit. Estimated delivery time: %s",
+			order.ID, estimatedDeliveryTime.Format(time.RFC3339))
+	} else {
+		log.Printf("Order %s is already in transit. Skipping.", order.ID)
+	}
 }
 
 func (s *Simulator) handleDeliverOrder(order *models.Order) {
-	// Get the delivery partner
+	// get the delivery partner
 	partner := s.getDeliveryPartner(order.DeliveryPartnerID)
 	if partner == nil {
 		log.Printf("Error: Delivery partner not found for order %s", order.ID)
 		return
 	}
 
-	// Get the user
+	// get the user
 	user := s.getUser(order.CustomerID)
 	if user == nil {
 		log.Printf("Error: User not found for order %s", order.ID)
 		return
 	}
 
-	// Check if the delivery partner is at the user's location
+	// check if the delivery partner is at the user's location
 	if !s.isAtLocation(partner.CurrentLocation, user.Location) {
-		// If not at the location, reschedule the delivery
+		// if not at the location, reschedule the delivery
 		nextAttempt := s.CurrentTime.Add(5 * time.Minute)
 		s.EventQueue.Enqueue(&models.Event{
 			Time: nextAttempt,
@@ -956,14 +963,14 @@ func (s *Simulator) handleDeliverOrder(order *models.Order) {
 		return
 	}
 
-	// Update order status
+	// update order status
 	order.Status = models.OrderStatusDelivered
 	order.ActualDeliveryTime = s.CurrentTime
 
-	// Update delivery partner status
+	// update delivery partner status
 	partner.Status = models.PartnerStatusAvailable
 
-	// Generate a review event
+	// generate a review event
 	s.EventQueue.Enqueue(&models.Event{
 		Time: s.CurrentTime.Add(30 * time.Minute), // Assume user leaves review after 30 minutes
 		Type: models.EventGenerateReview,
