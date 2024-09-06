@@ -40,7 +40,7 @@
   "near_location_threshold": 50.0,
   "city_latitude": 53.002666,
   "city_longitude": -2.179404,
-  "urban_radius": 5.0,
+  "urban_radius": 10.0,
   "hotspot_radius": 2.0,
   "partner_move_speed": 40.0,
   "location_precision": 0.0001,

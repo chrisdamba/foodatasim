@@ -1313,14 +1313,19 @@ func (s *Simulator) moveTowards(from, to models.Location, duration time.Duration
 
 	if distance <= maxDistance {
 		// if we can reach the destination, go close to it but not exactly there
-		ratio := 0.99 // go 99% of the way there
-		return s.intermediatePoint(from, to, ratio)
+		//ratio := 0.99 // go 99% of the way there
+		//return s.intermediatePoint(from, to, ratio)
+		return to
 	}
 
 	// calculate the ratio of how far we can move
 	ratio := maxDistance / distance
 
-	return s.intermediatePoint(from, to, ratio)
+	//return s.intermediatePoint(from, to, ratio)
+	return models.Location{
+		Lat: from.Lat + (to.Lat-from.Lat)*ratio,
+		Lon: from.Lon + (to.Lon-from.Lon)*ratio,
+	}
 }
 
 func (s *Simulator) isNearLocation(loc1, loc2 models.Location) bool {
@@ -1339,7 +1344,7 @@ func (s *Simulator) isNearLocation(loc1, loc2 models.Location) bool {
 		threshold *= 0.8 // smaller threshold in urban areas
 	}
 
-	return distance <= threshold
+	return distance <= threshold*2
 }
 
 func (s *Simulator) isAtLocation(loc1, loc2 models.Location) bool {
@@ -1702,8 +1707,8 @@ func generateID() string {
 	return cuid.New()
 }
 
-func degreesToRadians(degrees float64) float64 {
-	return degrees * math.Pi / 180
+func degreesToRadians(deg float64) float64 {
+	return deg * (math.Pi / 180.0)
 }
 
 func contains(slice []string, item string) bool {
