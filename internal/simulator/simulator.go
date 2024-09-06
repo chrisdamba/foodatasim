@@ -1003,7 +1003,7 @@ func (s *Simulator) handleCheckDeliveryStatus(order *models.Order) {
 	distance := s.calculateDistance(partner.CurrentLocation, user.Location)
 	log.Printf("Order %s: Distance to customer: %.2f km", order.ID, distance)
 
-	if s.isAtLocation(partner.CurrentLocation, user.Location) {
+	if distance <= deliveryThreshold {
 		// order has been delivered
 		s.handleDeliverOrder(order)
 	} else {
@@ -1012,6 +1012,7 @@ func (s *Simulator) handleCheckDeliveryStatus(order *models.Order) {
 
 		// move the partner towards the customer
 		partner.CurrentLocation = s.moveTowards(partner.CurrentLocation, user.Location, duration)
+		partner.LastUpdateTime = s.CurrentTime
 
 		// order is still in transit, schedule next check
 		nextCheckTime := s.CurrentTime.Add(5 * time.Minute)
@@ -1093,20 +1094,6 @@ func (s *Simulator) handleDeliverOrder(order *models.Order) {
 	user := s.getUser(order.CustomerID)
 	if user == nil {
 		log.Printf("Error: User not found for order %s", order.ID)
-		return
-	}
-
-	// check if the delivery partner is at the user's location
-	if !s.isAtLocation(partner.CurrentLocation, user.Location) {
-		// if not at the location, reschedule the delivery
-		nextAttempt := s.CurrentTime.Add(5 * time.Minute)
-		s.EventQueue.Enqueue(&models.Event{
-			Time: nextAttempt,
-			Type: models.EventDeliverOrder,
-			Data: order,
-		})
-		log.Printf("Delivery partner not at user location. Rescheduling delivery for order %s at %s",
-			order.ID, nextAttempt.Format(time.RFC3339))
 		return
 	}
 

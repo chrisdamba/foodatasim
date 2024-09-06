@@ -17,6 +17,7 @@ import (
 )
 
 const earthRadiusKm = 6371.0 // Earth's radius in kilometers
+const deliveryThreshold = 0.1
 
 func (s *Simulator) getUser(userID string) *models.User {
 	for i, user := range s.Users {
@@ -1405,7 +1406,7 @@ func (s *Simulator) isNearLocation(loc1, loc2 models.Location) bool {
 
 func (s *Simulator) isAtLocation(loc1, loc2 models.Location) bool {
 	distance := s.calculateDistance(loc1, loc2)
-	return distance < 0.1 // consider locations the same if they're within 100 meters
+	return distance <= deliveryThreshold // consider locations the same if they're within 100 meters
 }
 
 func (s *Simulator) adjustOrderFrequency(user *models.User) float64 {
