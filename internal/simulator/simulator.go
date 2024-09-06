@@ -249,6 +249,7 @@ func (s *Simulator) Run() {
 			// cancel stale orders and cleanup simulation state
 			s.cancelStaleOrders()
 			s.cleanupSimulationState()
+			s.removeCompletedOrders()
 
 			// show progress
 			s.showProgress(eventsCount)
@@ -667,23 +668,46 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 }
 
 func (s *Simulator) cleanupSimulationState() {
-	for _, partner := range s.DeliveryPartners {
-		if partner.Status != models.PartnerStatusAvailable && partner.CurrentOrderID == "" {
-			log.Printf("Inconsistent state: Partner %s has status %s but no current order. Resetting to available.",
-				partner.ID, partner.Status)
-			partner.Status = models.PartnerStatusAvailable
+	// create a map of valid order IDs
+	validOrderIDs := make(map[string]bool)
+	for _, order := range s.Orders {
+		if order.Status != models.OrderStatusDelivered && order.Status != models.OrderStatusCancelled {
+			validOrderIDs[order.ID] = true
 		}
 	}
 
-	for _, order := range s.Orders {
+	// check and correct partner statuses
+	for i, partner := range s.DeliveryPartners {
+		if partner.Status != models.PartnerStatusAvailable {
+			if partner.CurrentOrderID == "" || !validOrderIDs[partner.CurrentOrderID] {
+				log.Printf("Correcting inconsistent state: Partner %s has status %s but no valid current order. Resetting to available.",
+					partner.ID, partner.Status)
+				s.DeliveryPartners[i].Status = models.PartnerStatusAvailable
+				s.DeliveryPartners[i].CurrentOrderID = ""
+			}
+		} else if partner.CurrentOrderID != "" {
+			log.Printf("Correcting inconsistent state: Partner %s is available but has a current order. Clearing order ID.",
+				partner.ID)
+			s.DeliveryPartners[i].CurrentOrderID = ""
+		}
+	}
+
+	// check and correct order assignments
+	for i, order := range s.Orders {
 		if order.Status != models.OrderStatusDelivered && order.Status != models.OrderStatusCancelled {
 			if order.DeliveryPartnerID != "" {
 				partner := s.getDeliveryPartner(order.DeliveryPartnerID)
 				if partner == nil || partner.CurrentOrderID != order.ID {
-					log.Printf("Inconsistent state: Order %s assigned to non-existent or mismatched partner. Resetting.",
+					log.Printf("Correcting inconsistent state: Order %s assigned to non-existent or mismatched partner. Resetting.",
 						order.ID)
-					order.DeliveryPartnerID = ""
+					s.Orders[i].DeliveryPartnerID = ""
+					// try to reassign the order
+					s.assignDeliveryPartner(&s.Orders[i])
 				}
+			}
+			if order.EstimatedDeliveryTime.IsZero() || order.EstimatedDeliveryTime.Before(s.CurrentTime) {
+				log.Printf("Correcting invalid estimated delivery time for order %s", order.ID)
+				s.Orders[i].EstimatedDeliveryTime = s.CurrentTime.Add(30 * time.Minute)
 			}
 		}
 	}
@@ -968,10 +992,16 @@ func (s *Simulator) handleCheckDeliveryStatus(order *models.Order) {
 		return
 	}
 
+	distance := s.calculateDistance(partner.CurrentLocation, user.Location)
+	log.Printf("Order %s: Distance to customer: %.2f km", order.ID, distance)
+
 	if s.isAtLocation(partner.CurrentLocation, user.Location) {
 		// order has been delivered
 		s.handleDeliverOrder(order)
 	} else {
+		// move the partner towards the customer
+		partner.CurrentLocation = s.moveTowards(partner.CurrentLocation, user.Location)
+
 		// order is still in transit, schedule next check
 		nextCheckTime := s.CurrentTime.Add(5 * time.Minute)
 		s.EventQueue.Enqueue(&models.Event{
@@ -1075,6 +1105,7 @@ func (s *Simulator) handleDeliverOrder(order *models.Order) {
 
 	// update delivery partner status
 	partner.Status = models.PartnerStatusAvailable
+	partner.CurrentOrderID = ""
 
 	// generate a review event
 	s.EventQueue.Enqueue(&models.Event{
@@ -1085,6 +1116,21 @@ func (s *Simulator) handleDeliverOrder(order *models.Order) {
 
 	log.Printf("Order %s delivered to user %s at %s",
 		order.ID, user.ID, s.CurrentTime.Format(time.RFC3339))
+
+	// Ensure this event is being serialized and written
+	eventMsg, err := s.serializeEvent(models.Event{
+		Time: s.CurrentTime,
+		Type: models.EventDeliverOrder,
+		Data: order,
+	})
+	if err != nil {
+		log.Printf("Error serializing delivery event: %v", err)
+	} else {
+		output := s.determineOutputDestination()
+		if err := output.WriteMessage(eventMsg.Topic, eventMsg.Message); err != nil {
+			log.Printf("Failed to write delivery message: %v", err)
+		}
+	}
 }
 
 func (s *Simulator) handleUpdateUserBehaviour(update *models.UserBehaviourUpdate) {

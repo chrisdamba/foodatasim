@@ -455,31 +455,43 @@ func (s *Simulator) updateOrderStatuses() {
 				s.EventQueue.Enqueue(&models.Event{
 					Time: s.CurrentTime,
 					Type: models.EventPrepareOrder,
-					Data: &order,
+					Data: &s.Orders[i],
 				})
 			}
 		case models.OrderStatusPreparing:
-			if s.CurrentTime.After(order.PickupTime) {
+			if s.CurrentTime.After(order.PickupTime) || s.CurrentTime.Equal(order.PickupTime) {
 				s.Orders[i].Status = models.OrderStatusReady
+				log.Printf("Order %s is ready for pickup at %s", order.ID, s.CurrentTime.Format(time.RFC3339))
 				s.EventQueue.Enqueue(&models.Event{
 					Time: s.CurrentTime,
 					Type: models.EventOrderReady,
-					Data: &order,
+					Data: &s.Orders[i],
 				})
 			}
 		case models.OrderStatusReady:
 			if order.DeliveryPartnerID == "" {
 				// if no partner assigned, try to assign one
-				s.assignDeliveryPartner(&order)
-			} else if s.isDeliveryPartnerAtRestaurant(order) {
+				s.assignDeliveryPartner(&s.Orders[i])
+			} else if s.isDeliveryPartnerAtRestaurant(s.Orders[i]) {
 				s.Orders[i].Status = models.OrderStatusPickedUp
+				log.Printf("Order %s picked up by partner %s at %s", order.ID, order.DeliveryPartnerID, s.CurrentTime.Format(time.RFC3339))
 				s.EventQueue.Enqueue(&models.Event{
 					Time: s.CurrentTime,
 					Type: models.EventPickUpOrder,
-					Data: &order,
+					Data: &s.Orders[i],
 				})
 			}
 		case models.OrderStatusPickedUp:
+			s.Orders[i].Status = models.OrderStatusInTransit
+			s.Orders[i].InTransitTime = s.CurrentTime
+			log.Printf("Order %s is now in transit at %s", order.ID, s.CurrentTime.Format(time.RFC3339))
+			s.EventQueue.Enqueue(&models.Event{
+				Time: s.CurrentTime,
+				Type: models.EventOrderInTransit,
+				Data: &s.Orders[i],
+			})
+
+		case models.OrderStatusInTransit:
 			partner := s.getDeliveryPartner(order.DeliveryPartnerID)
 			if partner == nil {
 				log.Printf("Error: Delivery partner not found for order %s", order.ID)
@@ -498,57 +510,42 @@ func (s *Simulator) updateOrderStatuses() {
 				s.Orders[i].ActualDeliveryTime = s.CurrentTime
 				partner.Status = models.PartnerStatusAvailable
 				partner.CurrentOrderID = ""
+				log.Printf("Order %s delivered at %s", order.ID, s.CurrentTime.Format(time.RFC3339))
 				s.EventQueue.Enqueue(&models.Event{
 					Time: s.CurrentTime,
 					Type: models.EventDeliverOrder,
-					Data: &order,
+					Data: &s.Orders[i],
 				})
 				// schedule review creation for later
 				s.EventQueue.Enqueue(&models.Event{
 					Time: s.CurrentTime.Add(30 * time.Minute), // assume user leaves review after 30 minutes
 					Type: models.EventGenerateReview,
-					Data: &order,
+					Data: &s.Orders[i],
 				})
-			} else if s.Orders[i].Status != models.OrderStatusInTransit {
-				// order is just starting transit
-				s.Orders[i].Status = models.OrderStatusInTransit
-				s.Orders[i].InTransitTime = s.CurrentTime
-				s.EventQueue.Enqueue(&models.Event{
-					Time: s.CurrentTime,
-					Type: models.EventOrderInTransit,
-					Data: &order,
-				})
-			}
-			// schedule next check
-			s.EventQueue.Enqueue(&models.Event{
-				Time: s.CurrentTime.Add(5 * time.Minute),
-				Type: models.EventCheckDeliveryStatus,
-				Data: &order,
-			})
-		case models.OrderStatusInTransit:
-			if s.CurrentTime.After(order.EstimatedDeliveryTime) {
-				log.Printf("Order %s is past its estimated delivery time. Current time: %s, Estimated delivery time: %s",
-					order.ID, s.CurrentTime.Format(time.RFC3339), order.EstimatedDeliveryTime.Format(time.RFC3339))
+			} else {
+				// order is still in transit
+				nextCheckTime := s.CurrentTime.Add(5 * time.Minute)
+				if s.CurrentTime.After(order.EstimatedDeliveryTime) {
+					log.Printf("Order %s is past its estimated delivery time. Current: %s, Estimated: %s, Next check: %s",
+						order.ID, s.CurrentTime.Format(time.RFC3339), order.EstimatedDeliveryTime.Format(time.RFC3339), nextCheckTime.Format(time.RFC3339))
+				} else {
+					log.Printf("Order %s still in transit. Current: %s, Estimated: %s, Next check: %s",
+						order.ID, s.CurrentTime.Format(time.RFC3339), order.EstimatedDeliveryTime.Format(time.RFC3339), nextCheckTime.Format(time.RFC3339))
+				}
 
-				// schedule a check event
-				nextCheckTime := s.CurrentTime.Add(5 * time.Minute) // Check every 5 minutes, adjust as needed
+				// Schedule next check event
 				s.EventQueue.Enqueue(&models.Event{
 					Time: nextCheckTime,
 					Type: models.EventCheckDeliveryStatus,
-					Data: &order,
+					Data: &s.Orders[i],
 				})
-
-				log.Printf("Order %s is scheduled for next status check at: %s",
-					order.ID, nextCheckTime.Format(time.RFC3339))
-			} else {
-				log.Printf("Order %s is still in transit. Current time: %s, Estimated delivery time: %s",
-					order.ID, s.CurrentTime.Format(time.RFC3339), order.EstimatedDeliveryTime.Format(time.RFC3339))
 			}
+
 		case models.OrderStatusDelivered:
 			// check if it's time to generate a review
 			if s.CurrentTime.Sub(s.Orders[i].ActualDeliveryTime) >= s.Config.ReviewGenerationDelay {
-				if s.shouldGenerateReview(&order) {
-					s.handleGenerateReview(&order)
+				if s.shouldGenerateReview(&s.Orders[i]) {
+					s.handleGenerateReview(&s.Orders[i])
 				}
 			}
 		}
@@ -644,14 +641,27 @@ func (s *Simulator) cancelStaleOrders() {
 
 				// free up the assigned delivery partner
 				if order.DeliveryPartnerID != "" {
-					if partner := s.getDeliveryPartner(order.DeliveryPartnerID); partner != nil {
-						partner.Status = models.PartnerStatusAvailable
-						partner.CurrentOrderID = ""
+					for j, partner := range s.DeliveryPartners {
+						if partner.ID == order.DeliveryPartnerID {
+							s.DeliveryPartners[j].Status = models.PartnerStatusAvailable
+							s.DeliveryPartners[j].CurrentOrderID = ""
+							break
+						}
 					}
 				}
 			}
 		}
 	}
+}
+
+func (s *Simulator) removeCompletedOrders() {
+	var activeOrders []models.Order
+	for _, order := range s.Orders {
+		if order.Status != models.OrderStatusDelivered && order.Status != models.OrderStatusCancelled {
+			activeOrders = append(activeOrders, order)
+		}
+	}
+	s.Orders = activeOrders
 }
 
 func (s *Simulator) assignDeliveryPartner(order *models.Order) {
@@ -666,13 +676,20 @@ func (s *Simulator) assignDeliveryPartner(order *models.Order) {
 		selectedPartner := availablePartners[s.Rng.Intn(len(availablePartners))]
 		if selectedPartner != nil {
 			order.DeliveryPartnerID = selectedPartner.ID
-			selectedPartner.Status = models.PartnerStatusEnRoutePickup
-			selectedPartner.CurrentOrderID = order.ID // Add this line
-
 			// update the partner in the slice
 			for i, p := range s.DeliveryPartners {
 				if p.ID == selectedPartner.ID {
-					s.DeliveryPartners[i] = selectedPartner
+					s.DeliveryPartners[i].Status = models.PartnerStatusEnRoutePickup
+					s.DeliveryPartners[i].CurrentOrderID = order.ID
+					log.Printf("Assigned partner %s to order %s", selectedPartner.ID, order.ID)
+					break
+				}
+			}
+
+			// update the order in the Orders slice
+			for i, o := range s.Orders {
+				if o.ID == order.ID {
+					s.Orders[i] = *order
 					break
 				}
 			}
@@ -792,6 +809,7 @@ func (s *Simulator) updateDeliveryPartnerLocations() {
 					log.Printf("Partner %s arrived at restaurant for order %s", partner.ID, order.ID)
 				} else {
 					s.DeliveryPartners[i].Status = models.PartnerStatusAvailable
+					s.DeliveryPartners[i].CurrentOrderID = ""
 					log.Printf("Partner %s completed delivery of order %s", partner.ID, order.ID)
 					s.handleDeliverOrder(order)
 				}
@@ -866,7 +884,14 @@ func (s *Simulator) estimateDeliveryTime(partner *models.DeliveryPartner, order 
 	variability := 0.1 // 10% variability
 	adjustedTime := time.Duration(float64(totalEstimatedTime) * (1 + (s.Rng.Float64()*2-1)*variability))
 
-	return s.CurrentTime.Add(adjustedTime)
+	estimatedTime := s.CurrentTime.Add(adjustedTime)
+
+	if estimatedTime.IsZero() || estimatedTime.Before(s.CurrentTime) {
+		log.Printf("Warning: Invalid estimated delivery time for order %s. Setting to current time + 30 minutes.", order.ID)
+		estimatedTime = s.CurrentTime.Add(30 * time.Minute)
+	}
+
+	return estimatedTime
 }
 
 func (s *Simulator) scheduleRouteUpdates(order *models.Order, partner *models.DeliveryPartner, user *models.User, estimatedArrivalTime time.Time) {
@@ -1274,8 +1299,8 @@ func (s *Simulator) moveTowards(from, to models.Location) models.Location {
 }
 
 func (s *Simulator) isAtLocation(loc1, loc2 models.Location) bool {
-	return math.Abs(loc1.Lat-loc2.Lat) < s.Config.LocationPrecision &&
-		math.Abs(loc1.Lon-loc2.Lon) < s.Config.LocationPrecision
+	distance := s.calculateDistance(loc1, loc2)
+	return distance < 0.1 // consider locations the same if they're within 100 meters
 }
 
 func (s *Simulator) adjustOrderFrequency(user *models.User) float64 {
