@@ -468,7 +468,10 @@ func (s *Simulator) updateOrderStatuses() {
 				})
 			}
 		case models.OrderStatusReady:
-			if s.isDeliveryPartnerAtRestaurant(order) {
+			if order.DeliveryPartnerID == "" {
+				// if no partner assigned, try to assign one
+				s.assignDeliveryPartner(&order)
+			} else if s.isDeliveryPartnerAtRestaurant(order) {
 				s.Orders[i].Status = models.OrderStatusPickedUp
 				s.EventQueue.Enqueue(&models.Event{
 					Time: s.CurrentTime,
@@ -489,20 +492,22 @@ func (s *Simulator) updateOrderStatuses() {
 				continue
 			}
 
-			if s.isAtLocation(partner.CurrentLocation, user.Location) || s.isOrderDelivered(order) {
+			if s.isAtLocation(partner.CurrentLocation, user.Location) {
 				// order has been delivered
 				s.Orders[i].Status = models.OrderStatusDelivered
 				s.Orders[i].ActualDeliveryTime = s.CurrentTime
+				partner.Status = models.PartnerStatusAvailable
+				partner.CurrentOrderID = ""
 				s.EventQueue.Enqueue(&models.Event{
 					Time: s.CurrentTime,
 					Type: models.EventDeliverOrder,
-					Data: &s.Orders[i],
+					Data: &order,
 				})
 				// schedule review creation for later
 				s.EventQueue.Enqueue(&models.Event{
 					Time: s.CurrentTime.Add(30 * time.Minute), // assume user leaves review after 30 minutes
 					Type: models.EventGenerateReview,
-					Data: &s.Orders[i],
+					Data: &order,
 				})
 			} else if s.Orders[i].Status != models.OrderStatusInTransit {
 				// order is just starting transit
@@ -511,9 +516,15 @@ func (s *Simulator) updateOrderStatuses() {
 				s.EventQueue.Enqueue(&models.Event{
 					Time: s.CurrentTime,
 					Type: models.EventOrderInTransit,
-					Data: &s.Orders[i],
+					Data: &order,
 				})
 			}
+			// schedule next check
+			s.EventQueue.Enqueue(&models.Event{
+				Time: s.CurrentTime.Add(5 * time.Minute),
+				Type: models.EventCheckDeliveryStatus,
+				Data: &order,
+			})
 		case models.OrderStatusInTransit:
 			if s.CurrentTime.After(order.EstimatedDeliveryTime) {
 				log.Printf("Order %s is past its estimated delivery time. Current time: %s, Estimated delivery time: %s",
@@ -524,7 +535,7 @@ func (s *Simulator) updateOrderStatuses() {
 				s.EventQueue.Enqueue(&models.Event{
 					Time: nextCheckTime,
 					Type: models.EventCheckDeliveryStatus,
-					Data: order,
+					Data: &order,
 				})
 
 				log.Printf("Order %s is scheduled for next status check at: %s",
@@ -607,19 +618,10 @@ func (s *Simulator) generateNextOrderTime(user *models.User) time.Time {
 	return nextOrderTime
 }
 
-func (s *Simulator) updateOrderStatus(orderID string, status string) {
-	for i, order := range s.Orders {
-		if order.ID == orderID {
-			s.Orders[i].Status = status
-			if status == "delivered" {
-				s.CompletedOrdersByRestaurant[order.RestaurantID] = append(s.CompletedOrdersByRestaurant[order.RestaurantID], s.Orders[i])
-			}
-			break
-		}
-	}
-}
-
 func (s *Simulator) getPartnerCurrentOrder(partner *models.DeliveryPartner) *models.Order {
+	if partner.CurrentOrderID == "" {
+		return nil
+	}
 	for i := len(s.Orders) - 1; i >= 0; i-- {
 		order := &s.Orders[i]
 		if order.DeliveryPartnerID == partner.ID &&
@@ -627,7 +629,29 @@ func (s *Simulator) getPartnerCurrentOrder(partner *models.DeliveryPartner) *mod
 			return order
 		}
 	}
+	log.Printf("Warning: Order %s not found for partner %s", partner.CurrentOrderID, partner.ID)
 	return nil
+}
+
+func (s *Simulator) cancelStaleOrders() {
+	maxOrderDuration := 3 * time.Hour
+	for i, order := range s.Orders {
+		if order.Status != models.OrderStatusDelivered && order.Status != models.OrderStatusCancelled {
+			if s.CurrentTime.Sub(order.OrderPlacedAt) > maxOrderDuration {
+				s.Orders[i].Status = models.OrderStatusCancelled
+				log.Printf("Order %s cancelled due to timeout. Placed at: %s, Current time: %s",
+					order.ID, order.OrderPlacedAt.Format(time.RFC3339), s.CurrentTime.Format(time.RFC3339))
+
+				// free up the assigned delivery partner
+				if order.DeliveryPartnerID != "" {
+					if partner := s.getDeliveryPartner(order.DeliveryPartnerID); partner != nil {
+						partner.Status = models.PartnerStatusAvailable
+						partner.CurrentOrderID = ""
+					}
+				}
+			}
+		}
+	}
 }
 
 func (s *Simulator) assignDeliveryPartner(order *models.Order) {
@@ -640,16 +664,26 @@ func (s *Simulator) assignDeliveryPartner(order *models.Order) {
 	log.Printf("Attempting to assign partner for order %s. Available partners: %d", order.ID, len(availablePartners))
 	if len(availablePartners) > 0 {
 		selectedPartner := availablePartners[s.Rng.Intn(len(availablePartners))]
-		order.DeliveryPartnerID = selectedPartner.ID
-		partnerIndex := s.getPartnerIndex(selectedPartner.ID)
-		s.DeliveryPartners[partnerIndex].Status = models.PartnerStatusEnRoutePickup
+		if selectedPartner != nil {
+			order.DeliveryPartnerID = selectedPartner.ID
+			selectedPartner.Status = models.PartnerStatusEnRoutePickup
+			selectedPartner.CurrentOrderID = order.ID // Add this line
 
-		// set the estimated delivery time
-		order.EstimatedDeliveryTime = s.estimateDeliveryTime(selectedPartner, order)
+			// update the partner in the slice
+			for i, p := range s.DeliveryPartners {
+				if p.ID == selectedPartner.ID {
+					s.DeliveryPartners[i] = selectedPartner
+					break
+				}
+			}
 
-		s.notifyDeliveryPartner(selectedPartner, order)
-		log.Printf("Assigned partner %s to order %s. Estimated delivery time: %s",
-			selectedPartner.ID, order.ID, order.EstimatedDeliveryTime.Format(time.RFC3339))
+			// set the estimated delivery time
+			order.EstimatedDeliveryTime = s.estimateDeliveryTime(selectedPartner, order)
+
+			s.notifyDeliveryPartner(selectedPartner, order)
+			log.Printf("Assigned partner %s to order %s. Estimated delivery time: %s",
+				selectedPartner.ID, order.ID, order.EstimatedDeliveryTime.Format(time.RFC3339))
+		}
 	} else {
 		// if no partners are available, schedule a retry
 		retryTime := s.CurrentTime.Add(5 * time.Minute)
@@ -725,30 +759,41 @@ func (s *Simulator) updateDeliveryPartnerLocations() {
 		case models.PartnerStatusAvailable:
 			newLocation = s.moveTowardsHotspot(partner)
 			locationUpdated = true
-		case models.PartnerStatusEnRoutePickup:
+		case models.PartnerStatusEnRoutePickup, models.PartnerStatusEnRouteDelivery:
 			order := s.getPartnerCurrentOrder(partner)
-			if order != nil {
-				restaurant := s.getRestaurant(order.RestaurantID)
-				if restaurant != nil {
-					newLocation = s.moveTowards(partner.CurrentLocation, restaurant.Location)
-					locationUpdated = true
-					if s.isAtLocation(partner.CurrentLocation, restaurant.Location) {
-						s.DeliveryPartners[i].Status = models.PartnerStatusWaitingForPickup
-					}
-				}
+			if order == nil {
+				log.Printf("Warning: Partner %s has status %s but no current order", partner.ID, partner.Status)
+				continue
 			}
-		case models.PartnerStatusEnRouteDelivery:
-			// check if the delivery is complete
-			order := s.getPartnerCurrentOrder(partner)
-			if order != nil {
+
+			var destination models.Location
+			if partner.Status == models.PartnerStatusEnRoutePickup {
+				restaurant := s.getRestaurant(order.RestaurantID)
+				if restaurant == nil {
+					log.Printf("Error: Restaurant not found for order %s", order.ID)
+					continue
+				}
+				destination = restaurant.Location
+			} else {
 				user := s.getUser(order.CustomerID)
-				if user != nil {
-					newLocation = s.moveTowards(partner.CurrentLocation, user.Location)
-					locationUpdated = true
-					if s.isAtLocation(partner.CurrentLocation, user.Location) {
-						partner.Status = models.PartnerStatusAvailable
-						log.Printf("Partner %s completed delivery and is now available", partner.ID)
-					}
+				if user == nil {
+					log.Printf("Error: User not found for order %s", order.ID)
+					continue
+				}
+				destination = user.Location
+			}
+
+			newLocation = s.moveTowards(partner.CurrentLocation, destination)
+			locationUpdated = true
+
+			if s.isAtLocation(newLocation, destination) {
+				if partner.Status == models.PartnerStatusEnRoutePickup {
+					s.DeliveryPartners[i].Status = models.PartnerStatusWaitingForPickup
+					log.Printf("Partner %s arrived at restaurant for order %s", partner.ID, order.ID)
+				} else {
+					s.DeliveryPartners[i].Status = models.PartnerStatusAvailable
+					log.Printf("Partner %s completed delivery of order %s", partner.ID, order.ID)
+					s.handleDeliverOrder(order)
 				}
 			}
 		}

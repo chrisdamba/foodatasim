@@ -246,6 +246,10 @@ func (s *Simulator) Run() {
 			// run time-step simulation
 			s.simulateTimeStep()
 
+			// cancel stale orders and cleanup simulation state
+			s.cancelStaleOrders()
+			s.cleanupSimulationState()
+
 			// show progress
 			s.showProgress(eventsCount)
 
@@ -662,6 +666,29 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 	}, nil
 }
 
+func (s *Simulator) cleanupSimulationState() {
+	for _, partner := range s.DeliveryPartners {
+		if partner.Status != models.PartnerStatusAvailable && partner.CurrentOrderID == "" {
+			log.Printf("Inconsistent state: Partner %s has status %s but no current order. Resetting to available.",
+				partner.ID, partner.Status)
+			partner.Status = models.PartnerStatusAvailable
+		}
+	}
+
+	for _, order := range s.Orders {
+		if order.Status != models.OrderStatusDelivered && order.Status != models.OrderStatusCancelled {
+			if order.DeliveryPartnerID != "" {
+				partner := s.getDeliveryPartner(order.DeliveryPartnerID)
+				if partner == nil || partner.CurrentOrderID != order.ID {
+					log.Printf("Inconsistent state: Order %s assigned to non-existent or mismatched partner. Resetting.",
+						order.ID)
+					order.DeliveryPartnerID = ""
+				}
+			}
+		}
+	}
+}
+
 // event handlers
 func (s *Simulator) handlePlaceOrder(user *models.User) {
 	// Schedule next order for this user
@@ -683,27 +710,38 @@ func (s *Simulator) handlePrepareOrder(order *models.Order) {
 		return
 	}
 
-	// Update order status
+	// update order status
 	order.Status = models.OrderStatusPreparing
 
-	// Estimate prep time
+	// estimate prep time
 	prepTime := s.estimatePrepTime(restaurant, order.Items)
 
-	// Add some variability to prep time
+	// add some variability to prep time
 	variability := 0.2 // 20% variability
 	actualPrepTime := prepTime * (1 + (s.Rng.Float64()*2-1)*variability)
 
-	// Calculate when the order will be ready
+	// calculate when the order will be ready
 	readyTime := s.CurrentTime.Add(time.Duration(actualPrepTime) * time.Minute)
 
-	// Update order
+	// ensure prep time is reasonable
+	maxPrepTime := 2 * time.Hour
+	if readyTime.Sub(s.CurrentTime) > maxPrepTime {
+		readyTime = s.CurrentTime.Add(maxPrepTime)
+	}
+
+	// ensure ready time is not before current time
+	if readyTime.Before(s.CurrentTime) {
+		readyTime = s.CurrentTime.Add(15 * time.Minute)
+	}
+
+	// update order
 	order.PrepStartTime = s.CurrentTime
 	order.PickupTime = readyTime
 
-	// Update restaurant orders
+	// update restaurant orders
 	restaurant.CurrentOrders = append(restaurant.CurrentOrders, *order)
 
-	// Schedule the next event (order ready)
+	// schedule the next event (order ready)
 	s.EventQueue.Enqueue(&models.Event{
 		Time: readyTime,
 		Type: models.EventOrderReady,
@@ -950,24 +988,22 @@ func (s *Simulator) handleUpdateRestaurantStatus(restaurant *models.Restaurant) 
 	s.updateRestaurantMetrics(restaurant)
 
 	// adjust restaurant capacity based on current conditions
-	oldCapacity := restaurant.Capacity
 	restaurant.Capacity = s.adjustRestaurantCapacity(restaurant)
 
 	// update prep time based on current load
-	oldPrepTime := restaurant.PrepTime
 	restaurant.PrepTime = s.adjustPrepTime(restaurant)
 
 	// schedule next update
 	s.EventQueue.Enqueue(&models.Event{
-		Time: s.CurrentTime.Add(15 * time.Minute), // Update every 15 minutes
+		Time: s.CurrentTime.Add(15 * time.Minute), // update every 15 minutes
 		Type: models.EventUpdateRestaurantStatus,
 		Data: restaurant,
 	})
 
-	log.Printf("Updated status for restaurant %s at %s. Capacity: %d -> %d, Prep time: %.2f -> %.2f",
-		restaurant.ID, s.CurrentTime.Format(time.RFC3339),
-		oldCapacity, restaurant.Capacity,
-		oldPrepTime, restaurant.PrepTime)
+	//log.Printf("Updated status for restaurant %s at %s. Capacity: %d -> %d, Prep time: %.2f -> %.2f",
+	//	restaurant.ID, s.CurrentTime.Format(time.RFC3339),
+	//	oldCapacity, restaurant.Capacity,
+	//	oldPrepTime, restaurant.PrepTime)
 }
 
 func (s *Simulator) handleUpdatePartnerLocation(update *models.PartnerLocationUpdate) {
