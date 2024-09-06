@@ -679,7 +679,8 @@ func (s *Simulator) cleanupSimulationState() {
 	// check and correct partner statuses
 	for i, partner := range s.DeliveryPartners {
 		if partner.Status != models.PartnerStatusAvailable {
-			if partner.CurrentOrderID == "" || !validOrderIDs[partner.CurrentOrderID] {
+			order := s.getOrderByID(partner.CurrentOrderID)
+			if order == nil || order.DeliveryPartnerID != partner.ID {
 				log.Printf("Correcting inconsistent state: Partner %s has status %s but no valid current order. Resetting to available.",
 					partner.ID, partner.Status)
 				s.DeliveryPartners[i].Status = models.PartnerStatusAvailable
@@ -705,6 +706,16 @@ func (s *Simulator) cleanupSimulationState() {
 					s.assignDeliveryPartner(&s.Orders[i])
 				}
 			}
+			if order.EstimatedDeliveryTime.IsZero() || order.EstimatedDeliveryTime.Before(s.CurrentTime) {
+				log.Printf("Correcting invalid estimated delivery time for order %s", order.ID)
+				s.Orders[i].EstimatedDeliveryTime = s.CurrentTime.Add(30 * time.Minute)
+			}
+		}
+	}
+
+	// check and correct invalid estimated delivery times
+	for i, order := range s.Orders {
+		if order.Status != models.OrderStatusDelivered && order.Status != models.OrderStatusCancelled {
 			if order.EstimatedDeliveryTime.IsZero() || order.EstimatedDeliveryTime.Before(s.CurrentTime) {
 				log.Printf("Correcting invalid estimated delivery time for order %s", order.ID)
 				s.Orders[i].EstimatedDeliveryTime = s.CurrentTime.Add(30 * time.Minute)
@@ -857,24 +868,20 @@ func (s *Simulator) handleAssignDeliveryPartner(event *models.Event) {
 		return
 	}
 
-	// Select the best partner (for now, just select randomly)
+	// select the best partner (for now, just select randomly)
 	selectedPartner := availablePartners[s.Rng.Intn(len(availablePartners))]
 
-	// Assign the selected partner to the order
-	order.DeliveryPartnerID = selectedPartner.ID
-	selectedPartner.Status = models.PartnerStatusEnRoutePickup
-
-	// Update the partner's current location and status
-	partnerIndex := s.getPartnerIndex(selectedPartner.ID)
-	if partnerIndex != -1 {
-		s.DeliveryPartners[partnerIndex] = selectedPartner
+	// update both order and partner atomically
+	if err := s.assignPartnerToOrder(selectedPartner, order); err != nil {
+		log.Printf("Error assigning partner to order: %v", err)
+		return
 	}
 
-	// Calculate estimated pickup time
+	// calculate estimated pickup time
 	estimatedPickupTime := s.estimateArrivalTime(selectedPartner.CurrentLocation, restaurant.Location)
 	order.EstimatedPickupTime = estimatedPickupTime
 
-	// Schedule the pickup event
+	// schedule the pickup event
 	s.EventQueue.Enqueue(&models.Event{
 		Time: estimatedPickupTime,
 		Type: models.EventPickUpOrder,
@@ -884,7 +891,7 @@ func (s *Simulator) handleAssignDeliveryPartner(event *models.Event) {
 	log.Printf("Assigned delivery partner %s to order %s. Estimated pickup time: %s",
 		selectedPartner.ID, order.ID, estimatedPickupTime.Format(time.RFC3339))
 
-	// Notify the delivery partner (in a real system, this would send a notification)
+	// notify the delivery partner (in a real system, this would send a notification)
 	s.notifyDeliveryPartner(selectedPartner, order)
 }
 
@@ -955,18 +962,19 @@ func (s *Simulator) handlePickUpOrder(event *models.Event) {
 }
 
 func (s *Simulator) handleCancelOrder(order *models.Order) {
-	// Update order status
+	// update order status
 	order.Status = models.OrderStatusCancelled
 
-	// If a delivery partner was assigned, update their status
+	// if a delivery partner was assigned, update their status
 	if order.DeliveryPartnerID != "" {
 		partner := s.getDeliveryPartner(order.DeliveryPartnerID)
 		if partner != nil {
 			partner.Status = models.PartnerStatusAvailable
+			partner.CurrentOrderID = ""
 		}
 	}
 
-	// If the order was being prepared, update restaurant status
+	// if the order was being prepared, update restaurant status
 	if order.Status == models.OrderStatusPreparing {
 		restaurant := s.getRestaurant(order.RestaurantID)
 		if restaurant != nil {

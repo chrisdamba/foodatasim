@@ -623,18 +623,72 @@ func (s *Simulator) generateNextOrderTime(user *models.User) time.Time {
 	return nextOrderTime
 }
 
+func (s *Simulator) assignPartnerToOrder(partner *models.DeliveryPartner, order *models.Order) error {
+	// update order
+	order.DeliveryPartnerID = partner.ID
+
+	// update partner
+	partner.Status = models.PartnerStatusEnRoutePickup
+	partner.CurrentOrderID = order.ID
+
+	// update the partner in the simulator's state
+	partnerIndex := s.getPartnerIndex(partner.ID)
+	if partnerIndex == -1 {
+		return fmt.Errorf("partner not found in simulator state")
+	}
+	s.DeliveryPartners[partnerIndex] = partner
+
+	// update the order in the simulator's state
+	for i, o := range s.Orders {
+		if o.ID == order.ID {
+			s.Orders[i] = *order
+			return nil
+		}
+	}
+
+	return fmt.Errorf("order not found in simulator state")
+}
+
 func (s *Simulator) getPartnerCurrentOrder(partner *models.DeliveryPartner) *models.Order {
 	if partner.CurrentOrderID == "" {
 		return nil
 	}
+
+	// first, try to find the order by ID
+	for i := len(s.Orders) - 1; i >= 0; i-- {
+		order := &s.Orders[i]
+		if order.ID == partner.CurrentOrderID {
+			// Check if the order status is consistent with the partner having it
+			if order.DeliveryPartnerID == partner.ID &&
+				(order.Status == models.OrderStatusPickedUp ||
+					order.Status == models.OrderStatusReady ||
+					order.Status == models.OrderStatusInTransit) {
+				return order
+			} else {
+				log.Printf("Warning: Inconsistent state for order %s and partner %s. Order status: %s, Partner status: %s",
+					order.ID, partner.ID, order.Status, partner.Status)
+				// consider correcting the inconsistency here
+				return nil
+			}
+		}
+	}
+
+	// if not found by ID, look for any order assigned to this partner
 	for i := len(s.Orders) - 1; i >= 0; i-- {
 		order := &s.Orders[i]
 		if order.DeliveryPartnerID == partner.ID &&
-			(order.Status == "picked_up" || order.Status == "ready_for_pickup") {
+			(order.Status == models.OrderStatusPickedUp ||
+				order.Status == models.OrderStatusReady ||
+				order.Status == models.OrderStatusInTransit) {
+			log.Printf("Warning: Partner %s has mismatched CurrentOrderID. Expected %s, found %s",
+				partner.ID, partner.CurrentOrderID, order.ID)
+			// consider updating partner.CurrentOrderID here
 			return order
 		}
 	}
+
 	log.Printf("Warning: Order %s not found for partner %s", partner.CurrentOrderID, partner.ID)
+	// consider resetting partner.CurrentOrderID to "" here
 	return nil
 }
 
@@ -684,6 +738,8 @@ func (s *Simulator) assignDeliveryPartner(order *models.Order) {
 		selectedPartner := availablePartners[s.Rng.Intn(len(availablePartners))]
 		if selectedPartner != nil {
 			order.DeliveryPartnerID = selectedPartner.ID
+			selectedPartner.Status = models.PartnerStatusEnRoutePickup
+			selectedPartner.CurrentOrderID = order.ID
 			// update the partner in the slice
 			for i, p := range s.DeliveryPartners {
 				if p.ID == selectedPartner.ID {
@@ -1426,6 +1482,15 @@ func (s *Simulator) adjustPickupEfficiency(restaurant *models.Restaurant) float6
 
 	// Gradually adjust towards new efficiency
 	return restaurant.PickupEfficiency + (avgEfficiency-restaurant.PickupEfficiency)*s.Config.EfficiencyAdjustRate
+}
+
+func (s *Simulator) getOrderByID(orderID string) *models.Order {
+	for i, order := range s.Orders {
+		if order.ID == orderID {
+			return &s.Orders[i]
+		}
+	}
+	return nil
 }
 
 func (s *Simulator) getRecentOrders(userID string, count int) []models.Order {
