@@ -1,13 +1,17 @@
 package simulator
 
 import (
+	"encoding/csv"
 	"fmt"
 	"github.com/chrisdamba/foodatasim/internal/models"
 	"github.com/jaswdr/faker"
 	"github.com/lucsky/cuid"
 	"log"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -407,10 +411,10 @@ func (s *Simulator) createOrder(user *models.User) *models.Order {
 }
 
 func (s *Simulator) createAndAddOrder(user *models.User) (*models.Order, error) {
-	// Select a restaurant
+	// select a restaurant
 	restaurant := s.selectRestaurant(user)
 	if restaurant == nil {
-		// No suitable restaurant found, maybe schedule a retry later
+		// no suitable restaurant found, maybe schedule a retry later
 		s.EventQueue.Enqueue(&models.Event{
 			Time: s.CurrentTime.Add(15 * time.Minute),
 			Type: models.EventPlaceOrder,
@@ -419,11 +423,11 @@ func (s *Simulator) createAndAddOrder(user *models.User) (*models.Order, error) 
 		return nil, fmt.Errorf("no suitable restaurant found")
 	}
 
-	// Create a new order
+	// create a new order
 	order := s.createOrder(user)
 	order.RestaurantID = restaurant.ID
 
-	// Add the order to OrdersByUser
+	// add the order to OrdersByUser
 	s.OrdersByUser[user.ID] = append(s.OrdersByUser[user.ID], *order)
 
 	// Add the order to the restaurant's current orders
@@ -515,13 +519,16 @@ func (s *Simulator) updateOrderStatuses() {
 				log.Printf("Order %s is past its estimated delivery time. Current time: %s, Estimated delivery time: %s",
 					order.ID, s.CurrentTime.Format(time.RFC3339), order.EstimatedDeliveryTime.Format(time.RFC3339))
 
+				// schedule a check event
+				nextCheckTime := s.CurrentTime.Add(5 * time.Minute) // Check every 5 minutes, adjust as needed
 				s.EventQueue.Enqueue(&models.Event{
-					Time: s.CurrentTime,
-					Type: models.EventDeliverOrder,
-					Data: &order,
+					Time: nextCheckTime,
+					Type: models.EventCheckDeliveryStatus,
+					Data: order,
 				})
 
-				log.Printf("Scheduled delivery event for order %s", order.ID)
+				log.Printf("Order %s is scheduled for next status check at: %s",
+					order.ID, nextCheckTime.Format(time.RFC3339))
 			} else {
 				log.Printf("Order %s is still in transit. Current time: %s, Estimated delivery time: %s",
 					order.ID, s.CurrentTime.Format(time.RFC3339), order.EstimatedDeliveryTime.Format(time.RFC3339))
@@ -1353,6 +1360,194 @@ func (s *Simulator) initializeTrafficConditions() {
 	}
 }
 
+func (s *Simulator) serializeInitialDataToCSV(outputFolder string) error {
+	// clean the output folder before serializing
+	if err := cleanOutputFolder(outputFolder); err != nil {
+		return fmt.Errorf("failed to clean output folder: %w", err)
+	}
+
+	// serialise restaurants
+	if err := s.serializeRestaurantsToCSV(filepath.Join(outputFolder, "restaurants.csv")); err != nil {
+		return fmt.Errorf("failed to serialize restaurants: %w", err)
+	}
+
+	// serialise users
+	if err := s.serializeUsersToCSV(filepath.Join(outputFolder, "users.csv")); err != nil {
+		return fmt.Errorf("failed to serialize users: %w", err)
+	}
+
+	// serialise delivery partners
+	if err := s.serializeDeliveryPartnersToCSV(filepath.Join(outputFolder, "delivery_partners.csv")); err != nil {
+		return fmt.Errorf("failed to serialize delivery partners: %w", err)
+	}
+
+	// serialise menu items
+	if err := s.serializeMenuItemsToCSV(filepath.Join(outputFolder, "menu_items.csv")); err != nil {
+		return fmt.Errorf("failed to serialize menu items: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Simulator) serializeRestaurantsToCSV(filename string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	// Write header
+	header := []string{
+		"ID", "Name", "Latitude", "Longitude", "Cuisines", "MenuItemIds", "Rating", "TotalRatings",
+		"PrepTime", "MinPrepTime", "AvgPrepTime", "PickupEfficiency", "Capacity",
+		"Host", "Phone", "Town", "SlugName", "WebsiteLogoURL", "Offline", "Currency",
+	}
+	if err := writer.Write(header); err != nil {
+		return err
+	}
+
+	// Write data for each restaurant
+	for _, restaurant := range s.Restaurants {
+		row := []string{
+			restaurant.ID,
+			restaurant.Name,
+			strconv.FormatFloat(restaurant.Location.Lat, 'f', 6, 64),
+			strconv.FormatFloat(restaurant.Location.Lon, 'f', 6, 64),
+			strings.Join(restaurant.Cuisines, "|"),
+			strings.Join(restaurant.MenuItems, "|"),
+			strconv.FormatFloat(restaurant.Rating, 'f', 2, 64),
+			strconv.FormatFloat(restaurant.TotalRatings, 'f', 0, 64),
+			strconv.FormatFloat(restaurant.PrepTime, 'f', 2, 64),
+			strconv.FormatFloat(restaurant.MinPrepTime, 'f', 2, 64),
+			strconv.FormatFloat(restaurant.AvgPrepTime, 'f', 2, 64),
+			strconv.FormatFloat(restaurant.PickupEfficiency, 'f', 2, 64),
+			strconv.Itoa(restaurant.Capacity),
+			restaurant.Host,
+			restaurant.Phone,
+			restaurant.Town,
+			restaurant.SlugName,
+			restaurant.WebsiteLogoURL,
+			restaurant.Offline,
+			strconv.Itoa(restaurant.Currency),
+		}
+		if err := writer.Write(row); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Simulator) serializeUsersToCSV(filename string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	// Write header
+	header := []string{"ID", "Name", "Latitude", "Longitude", "Preferences", "DietaryRestrictions", "OrderFrequency"}
+	if err := writer.Write(header); err != nil {
+		return err
+	}
+
+	// Write data
+	for _, user := range s.Users {
+		row := []string{
+			user.ID,
+			user.Name,
+			strconv.FormatFloat(user.Location.Lat, 'f', 6, 64),
+			strconv.FormatFloat(user.Location.Lon, 'f', 6, 64),
+			strings.Join(user.Preferences, "|"),
+			strings.Join(user.DietaryRestrictions, "|"),
+			strconv.FormatFloat(user.OrderFrequency, 'f', 4, 64),
+		}
+		if err := writer.Write(row); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Simulator) serializeDeliveryPartnersToCSV(filename string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	// Write header
+	header := []string{"ID", "Name", "Latitude", "Longitude", "Status", "Rating", "TotalRatings"}
+	if err := writer.Write(header); err != nil {
+		return err
+	}
+
+	// Write data
+	for _, partner := range s.DeliveryPartners {
+		row := []string{
+			partner.ID,
+			partner.Name,
+			strconv.FormatFloat(partner.CurrentLocation.Lat, 'f', 6, 64),
+			strconv.FormatFloat(partner.CurrentLocation.Lon, 'f', 6, 64),
+			partner.Status,
+			strconv.FormatFloat(partner.Rating, 'f', 2, 64),
+			strconv.FormatFloat(partner.TotalRatings, 'f', 0, 64),
+		}
+		if err := writer.Write(row); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Simulator) serializeMenuItemsToCSV(filename string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	// Write header
+	header := []string{"ID", "RestaurantID", "Name", "Description", "Price", "Type", "Popularity", "PrepComplexity", "Ingredients"}
+	if err := writer.Write(header); err != nil {
+		return err
+	}
+
+	// Write data
+	for _, menuItem := range s.MenuItems {
+		row := []string{
+			menuItem.ID,
+			menuItem.RestaurantID,
+			menuItem.Name,
+			menuItem.Description,
+			strconv.FormatFloat(menuItem.Price, 'f', 2, 64),
+			menuItem.Type,
+			strconv.FormatFloat(menuItem.Popularity, 'f', 2, 64),
+			strconv.FormatFloat(menuItem.PrepComplexity, 'f', 2, 64),
+			strings.Join(menuItem.Ingredients, "|"),
+		}
+		if err := writer.Write(row); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func generateTrafficDensity(hour int) float64 {
 	fake := faker.New()
 	switch {
@@ -1411,4 +1606,18 @@ func safeUnixTime(t time.Time) int64 {
 		return 0
 	}
 	return t.Unix()
+}
+
+func cleanOutputFolder(outputFolder string) error {
+	err := os.RemoveAll(outputFolder)
+	if err != nil {
+		return fmt.Errorf("failed to remove output folder: %w", err)
+	}
+
+	err = os.MkdirAll(outputFolder, os.ModePerm)
+	if err != nil {
+		return fmt.Errorf("failed to create output folder: %w", err)
+	}
+
+	return nil
 }

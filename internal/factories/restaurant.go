@@ -29,7 +29,7 @@ func (rf *RestaurantFactory) CreateRestaurant(config *models.Config) *models.Res
 		ID:             cuid.New(),
 		Host:           fake.Internet().Domain(),
 		Name:           fake.Company().Name(),
-		Currency:       1, // Assuming 1 represents the default currency
+		Currency:       1, // assuming 1 represents the default currency
 		Phone:          fake.Phone().Number(),
 		Town:           fake.Address().City(),
 		SlugName:       fake.Internet().Slug(),
@@ -47,7 +47,7 @@ func (rf *RestaurantFactory) CreateRestaurant(config *models.Config) *models.Res
 		AvgPrepTime:      fake.Float64(0, 15, 45),
 		PickupEfficiency: fake.Float64(2, 50, 150) / 100,
 		Capacity:         fake.IntBetween(10, 50),
-		MenuItems:        []string{},
+		MenuItems:        make([]string, 0),
 		CurrentOrders:    []models.Order{},
 	}
 }

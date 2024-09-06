@@ -6,12 +6,14 @@ import (
 )
 
 const (
-	EventPlaceOrder               = "PlaceOrder"
-	EventPrepareOrder             = "PrepareOrder"
-	EventOrderReady               = "OrderReady"
-	EventAssignDeliveryPartner    = "AssignDeliveryPartner"
-	EventPickUpOrder              = "PickUpOrder"
-	EventOrderInTransit           = "OrderInTransit"
+	EventPlaceOrder            = "PlaceOrder"
+	EventPrepareOrder          = "PrepareOrder"
+	EventOrderReady            = "OrderReady"
+	EventAssignDeliveryPartner = "AssignDeliveryPartner"
+	EventPickUpOrder           = "PickUpOrder"
+	EventOrderInTransit        = "OrderInTransit"
+	EventCheckDeliveryStatus   = "CheckDeliveryStatus"
+
 	EventDeliverOrder             = "DeliverOrder"
 	EventCancelOrder              = "CancelOrder"
 	EventUpdateRestaurantStatus   = "UpdateRestaurantStatus"

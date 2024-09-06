@@ -141,12 +141,12 @@ func (s *Simulator) initializeData() {
 
 	// initialise menu items
 	fake := faker.New()
-	for _, restaurant := range s.Restaurants {
+	for restaurantID, restaurant := range s.Restaurants {
 		itemCount := fake.IntBetween(10, 30)
 		for i := 0; i < itemCount; i++ {
-			menuItem := menuItemFactory.CreateMenuItem(restaurant)
+			menuItem := menuItemFactory.CreateMenuItem(restaurant, s.Config)
 			s.MenuItems[menuItem.ID] = &menuItem
-			restaurant.MenuItems = append(restaurant.MenuItems, menuItem.ID)
+			s.Restaurants[restaurantID].MenuItems = append(s.Restaurants[restaurantID].MenuItems, menuItem.ID)
 		}
 	}
 
@@ -156,6 +156,17 @@ func (s *Simulator) initializeData() {
 	// initialise maps
 	s.OrdersByUser = make(map[string][]models.Order)
 	s.CompletedOrdersByRestaurant = make(map[string][]models.Order)
+
+	outputFolder := s.Config.OutputFolder
+	if outputFolder == "" {
+		outputFolder = "output" // Default to "output" if not specified
+	}
+	log.Printf("Cleaning and preparing output folder: %s", outputFolder)
+	if err := s.serializeInitialDataToCSV(outputFolder); err != nil {
+		log.Printf("Failed to serialize initial data to CSV: %v", err)
+	} else {
+		log.Printf("Initial data serialized to CSV in folder: %s", outputFolder)
+	}
 }
 
 func (s *Simulator) processEvent(event *models.Event) {
@@ -172,6 +183,8 @@ func (s *Simulator) processEvent(event *models.Event) {
 		s.handleUpdatePartnerLocation(event.Data.(*models.PartnerLocationUpdate))
 	case models.EventOrderInTransit:
 		s.handleOrderInTransit(event.Data.(*models.Order))
+	case models.EventCheckDeliveryStatus:
+		s.handleCheckDeliveryStatus(event.Data.(*models.Order))
 	case models.EventDeliverOrder:
 		s.handleDeliverOrder(event.Data.(*models.Order))
 	case models.EventCancelOrder:
@@ -299,7 +312,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 	var topic string
 	var eventData interface{}
 
-	// Base event structure that all events will have
+	// base event structure that all events will have
 	type BaseEvent struct {
 		Timestamp    int64  `json:"timestamp"`
 		EventType    string `json:"eventType"`
@@ -317,7 +330,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 	case models.EventPlaceOrder:
 		user := event.Data.(*models.User)
 		baseEvent.UserID = user.ID
-		// Create an order for this user
+		// create an order for this user
 		order, err := s.createAndAddOrder(user)
 		if err != nil {
 			return models.EventMessage{}, fmt.Errorf("failed to create order: %w", err)
@@ -339,7 +352,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			Status:        order.Status,
 			OrderPlacedAt: order.OrderPlacedAt.Unix(),
 		}
-		topic = "order_events"
+		topic = "order_placed_events"
 
 	case models.EventPrepareOrder:
 		order := event.Data.(*models.Order)
@@ -470,6 +483,38 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			Status:                order.Status,
 		}
 		topic = "order_in_transit_events"
+
+	case models.EventCheckDeliveryStatus:
+		order, ok := event.Data.(*models.Order)
+		if !ok {
+			return models.EventMessage{}, fmt.Errorf("invalid data type for EventCheckDeliveryStatus")
+		}
+		baseEvent.UserID = order.CustomerID
+		baseEvent.RestaurantID = order.RestaurantID
+		baseEvent.DeliveryID = order.DeliveryPartnerID
+
+		partner := s.getDeliveryPartner(order.DeliveryPartnerID)
+		var currentLocation models.Location
+		if partner != nil {
+			currentLocation = partner.CurrentLocation
+		}
+
+		eventData = struct {
+			BaseEvent
+			OrderID               string          `json:"orderId"`
+			Status                string          `json:"status"`
+			EstimatedDeliveryTime int64           `json:"estimated_delivery_time"`
+			CurrentLocation       models.Location `json:"current_location"`
+			NextCheckTime         int64           `json:"next_check_time"`
+		}{
+			BaseEvent:             baseEvent,
+			OrderID:               order.ID,
+			Status:                order.Status,
+			EstimatedDeliveryTime: order.EstimatedDeliveryTime.Unix(),
+			CurrentLocation:       currentLocation,
+			NextCheckTime:         event.Time.Unix(),
+		}
+		topic = "delivery_status_check_events"
 
 	case models.EventDeliverOrder:
 		order := event.Data.(*models.Order)
@@ -835,15 +880,16 @@ func (s *Simulator) handlePickUpOrder(event *models.Event) {
 	estimatedDeliveryTime := s.estimateDeliveryTime(partner, order)
 	order.EstimatedDeliveryTime = estimatedDeliveryTime
 
-	// schedule delivery event
+	// schedule the first check event
+	nextCheckTime := s.CurrentTime.Add(5 * time.Minute) // check every 5 minutes
 	s.EventQueue.Enqueue(&models.Event{
-		Time: estimatedDeliveryTime,
-		Type: models.EventDeliverOrder,
+		Time: nextCheckTime,
+		Type: models.EventCheckDeliveryStatus,
 		Data: order,
 	})
 
-	log.Printf("Order %s picked up by partner %s. Estimated delivery time: %s",
-		order.ID, partner.ID, estimatedDeliveryTime.Format(time.RFC3339))
+	log.Printf("Order %s picked up by partner %s. Estimated delivery time: %s, Next status check at: %s",
+		order.ID, partner.ID, estimatedDeliveryTime.Format(time.RFC3339), nextCheckTime.Format(time.RFC3339))
 }
 
 func (s *Simulator) handleCancelOrder(order *models.Order) {
@@ -873,6 +919,30 @@ func (s *Simulator) handleCancelOrder(order *models.Order) {
 	}
 
 	log.Printf("Order %s cancelled at %s", order.ID, s.CurrentTime.Format(time.RFC3339))
+}
+
+func (s *Simulator) handleCheckDeliveryStatus(order *models.Order) {
+	partner := s.getDeliveryPartner(order.DeliveryPartnerID)
+	user := s.getUser(order.CustomerID)
+
+	if partner == nil || user == nil {
+		log.Printf("Error: Cannot check delivery status for order %s. Missing partner or user info.", order.ID)
+		return
+	}
+
+	if s.isAtLocation(partner.CurrentLocation, user.Location) {
+		// order has been delivered
+		s.handleDeliverOrder(order)
+	} else {
+		// order is still in transit, schedule next check
+		nextCheckTime := s.CurrentTime.Add(5 * time.Minute)
+		s.EventQueue.Enqueue(&models.Event{
+			Time: nextCheckTime,
+			Type: models.EventCheckDeliveryStatus,
+			Data: order,
+		})
+		log.Printf("Order %s still in transit. Next status check at: %s", order.ID, nextCheckTime.Format(time.RFC3339))
+	}
 }
 
 func (s *Simulator) handleUpdateRestaurantStatus(restaurant *models.Restaurant) {
@@ -919,16 +989,16 @@ func (s *Simulator) handleOrderInTransit(order *models.Order) {
 		order.Status = models.OrderStatusInTransit
 		order.InTransitTime = s.CurrentTime
 
-		// schedule the delivery event
-		estimatedDeliveryTime := s.estimateDeliveryTime(partner, order)
+		// schedule a check event
+		nextCheckTime := s.CurrentTime.Add(5 * time.Minute) // check every 5 minutes
 		s.EventQueue.Enqueue(&models.Event{
-			Time: estimatedDeliveryTime,
-			Type: models.EventDeliverOrder,
+			Time: nextCheckTime,
+			Type: models.EventCheckDeliveryStatus,
 			Data: order,
 		})
 
-		log.Printf("Order %s is now in transit. Estimated delivery time: %s",
-			order.ID, estimatedDeliveryTime.Format(time.RFC3339))
+		log.Printf("Order %s is now in transit. Next status check at: %s",
+			order.ID, nextCheckTime.Format(time.RFC3339))
 	} else {
 		log.Printf("Order %s is already in transit. Skipping.", order.ID)
 	}

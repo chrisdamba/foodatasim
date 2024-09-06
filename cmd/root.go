@@ -27,6 +27,10 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading review data: %v", err)
 		}
+		err = cfg.LoadMenuDishData("data/menu_dishes.csv")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading menu dish data: %v", err)
+		}
 		sim := simulator.NewSimulator(cfg)
 		sim.Run()
 	},

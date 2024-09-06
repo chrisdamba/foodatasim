@@ -17,6 +17,10 @@ type ReviewData struct {
 	Liked   bool   `mapstructure:"liked"`
 }
 
+type MenuDish struct {
+	Name string `mapstructure:"name"`
+}
+
 type Config struct {
 	Seed               int       `mapstructure:"seed"`
 	StartDate          time.Time `mapstructure:"start_date"`
@@ -33,6 +37,7 @@ type Config struct {
 	KafkaEnabled       bool      `mapstructure:"kafka_enabled"`
 	KafkaBrokerList    string    `mapstructure:"kafka_broker_list"`
 	OutputFile         string    `mapstructure:"output_file_path"`
+	OutputFolder       string    `mapstructure:"output_folder"`
 	Continuous         bool      `mapstructure:"continuous"`
 	// Additional fields
 	CityName              string        `mapstructure:"city_name"`
@@ -59,6 +64,7 @@ type Config struct {
 	PartnerRatingAlpha    float64       `mapstructure:"partner_rating_alpha"`
 	ReviewGenerationDelay time.Duration `mapstructure:"review_generation_delay"` // How many minutes to wait before leaving a review
 	ReviewData            []ReviewData  `mapstructure:"review_data"`
+	MenuDishes            []MenuDish    `mapstructure:"menu_dishes"`
 
 	NearLocationThreshold float64 `mapstructure:"near_location_threshold"`
 	CityLat               float64 `mapstructure:"city_latitude"`
@@ -131,6 +137,33 @@ func (cfg *Config) LoadReviewData(filePath string) error {
 			Liked:   liked,
 		}
 		cfg.ReviewData = append(cfg.ReviewData, review)
+	}
+
+	return nil
+}
+
+func (cfg *Config) LoadMenuDishData(filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.Read()
+
+	for {
+		fields, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		dish := MenuDish{
+			Name: fields[1],
+		}
+		cfg.MenuDishes = append(cfg.MenuDishes, dish)
 	}
 
 	return nil

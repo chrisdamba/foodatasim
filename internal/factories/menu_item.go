@@ -2,16 +2,18 @@ package factories
 
 import (
 	"github.com/chrisdamba/foodatasim/internal/models"
+	"github.com/lucsky/cuid"
 	"math/rand"
+	"strings"
 )
 
 type MenuItemFactory struct{}
 
-func (mf *MenuItemFactory) CreateMenuItem(restaurant *models.Restaurant) models.MenuItem {
+func (mf *MenuItemFactory) CreateMenuItem(restaurant *models.Restaurant, config *models.Config) models.MenuItem {
 	return models.MenuItem{
-		ID:                 fake.UUID().V4(),
+		ID:                 cuid.New(),
 		RestaurantID:       restaurant.ID,
-		Name:               generateRandomMenuItem(restaurant.Cuisines),
+		Name:               generateRandomMenuItem(restaurant.Cuisines, config),
 		Description:        fake.Lorem().Sentence(10),
 		Price:              fake.Float64(2, 5, 50),
 		PrepTime:           fake.Float64(0, 5, 30),
@@ -34,7 +36,19 @@ func generateRandomIngredients() []string {
 	return ingredients
 }
 
-func generateRandomMenuItem(cuisines []string) string {
+func generateRandomMenuItem(cuisines []string, config *models.Config) string {
+	// check if config has menu dishes
+	if len(config.MenuDishes) > 0 {
+		// randomly choose between 1 and 5 dishes from the config
+		dishCount := rand.Intn(5) + 1
+		menuDishes := make([]string, dishCount)
+		for i := 0; i < dishCount; i++ {
+			menuDishes[i] = config.MenuDishes[rand.Intn(len(config.MenuDishes))].Name
+		}
+		return strings.Join(menuDishes, ", ")
+	}
+
+	// fallback to the default predefined items based on cuisine
 	items := map[string][]string{
 		"Pizza":         {"Margherita", "Pepperoni", "Hawaiian", "Veggie Supreme"},
 		"Curry":         {"Chicken Tikka Masala", "Vegetable Curry", "Beef Madras", "Paneer Butter Masala"},
