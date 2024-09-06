@@ -234,6 +234,24 @@ func (s *Simulator) getRestaurant(restaurantID string) *models.Restaurant {
 	return restaurant
 }
 
+func (s *Simulator) getNearbyRestaurants(userLocation models.Location, radius float64) []*models.Restaurant {
+	var nearbyRestaurants []*models.Restaurant
+	for _, restaurant := range s.Restaurants {
+		if distance := s.calculateDistance(userLocation, restaurant.Location); distance <= radius {
+			nearbyRestaurants = append(nearbyRestaurants, restaurant)
+		}
+	}
+	return nearbyRestaurants
+}
+
+func (s *Simulator) getRandomRestaurant() *models.Restaurant {
+	restaurants := make([]*models.Restaurant, 0, len(s.Restaurants))
+	for _, r := range s.Restaurants {
+		restaurants = append(restaurants, r)
+	}
+	return restaurants[s.Rng.Intn(len(restaurants))]
+}
+
 func (s *Simulator) selectRestaurant(user *models.User) *models.Restaurant {
 	// Get restaurants within a certain radius of the user
 	nearbyRestaurants := s.getNearbyRestaurants(user.Location, 5.0) // 5.0 km radius
@@ -290,16 +308,6 @@ func (s *Simulator) selectRestaurant(user *models.User) *models.Restaurant {
 	return scoredRestaurants[0].restaurant
 }
 
-func (s *Simulator) getNearbyRestaurants(userLocation models.Location, radius float64) []*models.Restaurant {
-	var nearbyRestaurants []*models.Restaurant
-	for _, restaurant := range s.Restaurants {
-		if distance := s.calculateDistance(userLocation, restaurant.Location); distance <= radius {
-			nearbyRestaurants = append(nearbyRestaurants, restaurant)
-		}
-	}
-	return nearbyRestaurants
-}
-
 func (s *Simulator) calculateRestaurantScore(restaurant *models.Restaurant, user *models.User) float64 {
 	// Base score is the restaurant's rating
 	score := restaurant.Rating
@@ -328,19 +336,19 @@ func (s *Simulator) calculateRestaurantScore(restaurant *models.Restaurant, user
 }
 
 func (s *Simulator) calculateDistance(loc1, loc2 models.Location) float64 {
-	// Convert latitude and longitude from degrees to radians
+	// convert latitude and longitude from degrees to radians
 	lat1 := degreesToRadians(loc1.Lat)
 	lon1 := degreesToRadians(loc1.Lon)
 	lat2 := degreesToRadians(loc2.Lat)
 	lon2 := degreesToRadians(loc2.Lon)
 
-	// Haversine formula
+	// haversine formula
 	dlat := lat2 - lat1
 	dlon := lon2 - lon1
 	a := math.Pow(math.Sin(dlat/2), 2) + math.Cos(lat1)*math.Cos(lat2)*math.Pow(math.Sin(dlon/2), 2)
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 
-	// Calculate the distance
+	// calculate the distance
 	distance := earthRadiusKm * c
 
 	return distance // Returns distance in kilometers
@@ -728,7 +736,9 @@ func (s *Simulator) getAvailablePartnersNear(location models.Location) []*models
 	for i := range s.DeliveryPartners {
 		partner := s.DeliveryPartners[i]
 		isNear := s.isNearLocation(partner.CurrentLocation, location)
-		log.Printf("Partner %s status: %s, isNear: %v", partner.ID, partner.Status, isNear)
+		log.Printf("Partner %s status: %s, isNear: %v, distance: %.2f km",
+			partner.ID, partner.Status, isNear,
+			s.calculateDistance(partner.CurrentLocation, location))
 		if partner.Status == models.PartnerStatusAvailable && isNear {
 			availablePartners = append(availablePartners, partner)
 		}
@@ -772,9 +782,13 @@ func (s *Simulator) updateDeliveryPartnerLocations() {
 		var newLocation models.Location
 		var locationUpdated bool
 		var speed float64
+
+		// calculate the duration since last update
+		duration := s.CurrentTime.Sub(partner.LastUpdateTime)
+
 		switch partner.Status {
 		case models.PartnerStatusAvailable:
-			newLocation = s.moveTowardsHotspot(partner)
+			newLocation = s.moveTowardsHotspot(partner, duration)
 			locationUpdated = true
 		case models.PartnerStatusEnRoutePickup, models.PartnerStatusEnRouteDelivery:
 			order := s.getPartnerCurrentOrder(partner)
@@ -800,7 +814,7 @@ func (s *Simulator) updateDeliveryPartnerLocations() {
 				destination = user.Location
 			}
 
-			newLocation = s.moveTowards(partner.CurrentLocation, destination)
+			newLocation = s.moveTowards(partner.CurrentLocation, destination, duration)
 			locationUpdated = true
 
 			if s.isAtLocation(newLocation, destination) {
@@ -1205,25 +1219,6 @@ func (s *Simulator) estimatePrepTime(restaurant *models.Restaurant, items []stri
 	return math.Max(finalPrepTime, restaurant.MinPrepTime)
 }
 
-func (s *Simulator) isNearLocation(loc1, loc2 models.Location) bool {
-	distance := s.calculateDistance(loc1, loc2)
-
-	// base threshold
-	threshold := s.Config.NearLocationThreshold
-
-	// adjust threshold based on time of day (e.g., wider range during off-peak hours)
-	if !s.isPeakHour(s.CurrentTime) {
-		threshold *= 1.5
-	}
-
-	// adjust threshold based on urban density
-	if s.isUrbanArea(loc1) && s.isUrbanArea(loc2) {
-		threshold *= 0.8 // smaller threshold in urban areas
-	}
-
-	return distance <= threshold*2
-}
-
 func (s *Simulator) isUrbanArea(loc models.Location) bool {
 	// Implement logic to determine if a location is in an urban area
 	// This could be based on population density data or predefined urban zones
@@ -1241,16 +1236,22 @@ func (s *Simulator) getPartnerIndex(partnerID string) int {
 	return -1 // Return -1 if partner not found
 }
 
-func (s *Simulator) moveTowardsHotspot(partner *models.DeliveryPartner) models.Location {
-	// Find the nearest hotspot
-	nearestHotspot := s.findNearestHotspot(partner.CurrentLocation)
+func (s *Simulator) moveTowardsHotspot(partner *models.DeliveryPartner, duration time.Duration) models.Location {
+	cityCenter := models.Location{Lat: s.Config.CityLat, Lon: s.Config.CityLon}
+	if s.calculateDistance(partner.CurrentLocation, cityCenter) > s.Config.NearLocationThreshold {
+		// if partner is too far from city center, move towards it
+		return s.moveTowards(partner.CurrentLocation, cityCenter, duration)
+	}
 
-	// Move towards the hotspot
-	return s.moveTowards(partner.CurrentLocation, nearestHotspot)
+	// find the nearest restaurant or hotspot
+	nearestLocation := s.findNearestRestaurantOrHotspot(partner.CurrentLocation)
+
+	// move towards the location
+	return s.moveTowards(partner.CurrentLocation, nearestLocation, duration)
 }
 
 func (s *Simulator) findNearestHotspot(loc models.Location) models.Location {
-	// Define a list of hotspots
+	// define a list of hotspots
 	hotspots := []models.Hotspot{
 		{Location: models.Location{Lat: s.Config.CityLat, Lon: s.Config.CityLon}, Weight: 1.0},                 // City center
 		{Location: models.Location{Lat: s.Config.CityLat + 0.01, Lon: s.Config.CityLon + 0.01}, Weight: 0.8},   // Business district
@@ -1265,7 +1266,7 @@ func (s *Simulator) findNearestHotspot(loc models.Location) models.Location {
 	for _, hotspot := range hotspots {
 		distance := s.calculateDistance(loc, hotspot.Location)
 
-		// Adjust distance by hotspot weight (more important hotspots seem "closer")
+		// adjust distance by hotspot weight (more important hotspots seem "closer")
 		adjustedDistance := distance / hotspot.Weight
 
 		if adjustedDistance < minDistance {
@@ -1274,7 +1275,7 @@ func (s *Simulator) findNearestHotspot(loc models.Location) models.Location {
 		}
 	}
 
-	// Add some randomness to the chosen hotspot
+	// add some randomness to the chosen hotspot
 	jitter := 0.001 // About 111 meters
 	nearestHotspot.Location.Lat += (s.Rng.Float64() - 0.5) * jitter
 	nearestHotspot.Location.Lon += (s.Rng.Float64() - 0.5) * jitter
@@ -1282,20 +1283,63 @@ func (s *Simulator) findNearestHotspot(loc models.Location) models.Location {
 	return nearestHotspot.Location
 }
 
-func (s *Simulator) moveTowards(from, to models.Location) models.Location {
-	distance := s.calculateDistance(from, to)
-	if distance <= s.Config.PartnerMoveSpeed {
-		return to // If we can reach the destination, go directly there
+func (s *Simulator) findNearestRestaurantOrHotspot(loc models.Location) models.Location {
+	nearestDist := math.Inf(1)
+	var nearestLoc models.Location
+
+	// check nearby restaurants
+	for _, restaurant := range s.Restaurants {
+		dist := s.calculateDistance(loc, restaurant.Location)
+		if dist < nearestDist {
+			nearestDist = dist
+			nearestLoc = restaurant.Location
+		}
 	}
 
-	// Calculate the ratio of how far we can move
-	ratio := s.Config.PartnerMoveSpeed / distance
+	// if no nearby restaurant, use a hotspot
+	if nearestDist == math.Inf(1) {
+		nearestLoc = s.findNearestHotspot(loc)
+	}
 
-	// Calculate new position
-	newLat := from.Lat + (to.Lat-from.Lat)*ratio
-	newLon := from.Lon + (to.Lon-from.Lon)*ratio
+	return nearestLoc
+}
 
-	return models.Location{Lat: newLat, Lon: newLon}
+func (s *Simulator) moveTowards(from, to models.Location, duration time.Duration) models.Location {
+	distance := s.calculateDistance(from, to)
+	speed := s.Config.PartnerMoveSpeed * (1 + (s.Rng.Float64()*0.2 - 0.1)) // Add 10% randomness
+
+	// calculate max distance that can be moved in this duration
+	maxDistance := speed * duration.Hours()
+
+	if distance <= maxDistance {
+		// if we can reach the destination, go close to it but not exactly there
+		ratio := 0.99 // go 99% of the way there
+		return s.intermediatePoint(from, to, ratio)
+	}
+
+	// calculate the ratio of how far we can move
+	ratio := maxDistance / distance
+
+	return s.intermediatePoint(from, to, ratio)
+}
+
+func (s *Simulator) isNearLocation(loc1, loc2 models.Location) bool {
+	distance := s.calculateDistance(loc1, loc2)
+
+	// base threshold
+	threshold := s.Config.NearLocationThreshold
+
+	// adjust threshold based on time of day (e.g., wider range during off-peak hours)
+	if !s.isPeakHour(s.CurrentTime) {
+		threshold *= 1.5
+	}
+
+	// adjust threshold based on urban density
+	if s.isUrbanArea(loc1) && s.isUrbanArea(loc2) {
+		threshold *= 0.8 // smaller threshold in urban areas
+	}
+
+	return distance <= threshold
 }
 
 func (s *Simulator) isAtLocation(loc1, loc2 models.Location) bool {
@@ -1427,6 +1471,30 @@ func (s *Simulator) initializeTrafficConditions() {
 			},
 			Density: generateTrafficDensity(hour),
 		})
+	}
+}
+
+func (s *Simulator) intermediatePoint(from, to models.Location, fraction float64) models.Location {
+	// convert to radians
+	φ1 := from.Lat * math.Pi / 180
+	λ1 := from.Lon * math.Pi / 180
+	φ2 := to.Lat * math.Pi / 180
+	λ2 := to.Lon * math.Pi / 180
+
+	// calculate intermediate point
+	a := math.Sin((1-fraction)*φ1) * math.Cos(fraction*φ2)
+	b := math.Sin((1-fraction)*φ2) * math.Cos(fraction*φ1)
+	x := a + b
+	y := math.Cos((1-fraction)*φ1) * math.Cos(fraction*φ2) * math.Cos(λ2-λ1)
+	φ3 := math.Atan2(x, y)
+	λ3 := λ1 + math.Atan2(math.Sin(λ2-λ1)*math.Cos(fraction*φ2),
+		math.Cos((1-fraction)*φ1)*math.Cos(fraction*φ2)-
+			math.Sin((1-fraction)*φ1)*math.Sin(fraction*φ2)*math.Cos(λ2-λ1))
+
+	// convert back to degrees
+	return models.Location{
+		Lat: φ3 * 180 / math.Pi,
+		Lon: λ3 * 180 / math.Pi,
 	}
 }
 

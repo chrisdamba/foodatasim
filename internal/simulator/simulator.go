@@ -999,8 +999,11 @@ func (s *Simulator) handleCheckDeliveryStatus(order *models.Order) {
 		// order has been delivered
 		s.handleDeliverOrder(order)
 	} else {
+		// calculate duration since last update
+		duration := s.CurrentTime.Sub(partner.LastUpdateTime)
+
 		// move the partner towards the customer
-		partner.CurrentLocation = s.moveTowards(partner.CurrentLocation, user.Location)
+		partner.CurrentLocation = s.moveTowards(partner.CurrentLocation, user.Location, duration)
 
 		// order is still in transit, schedule next check
 		nextCheckTime := s.CurrentTime.Add(5 * time.Minute)
