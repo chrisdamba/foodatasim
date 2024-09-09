@@ -345,10 +345,10 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		eventData = struct {
 			BaseEvent
 			OrderID       string   `json:"orderId"`
-			Items         []string `json:"item_ids"`
+			Items         []string `json:"itemIds"`
 			TotalAmount   float64  `json:"totalAmount"`
 			Status        string   `json:"status"`
-			OrderPlacedAt int64    `json:"order_placed_at"`
+			OrderPlacedAt int64    `json:"orderPlacedAt"`
 		}{
 			BaseEvent:     baseEvent,
 			OrderID:       order.ID,
@@ -367,7 +367,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			BaseEvent
 			OrderID       string `json:"orderId"`
 			Status        string `json:"status"`
-			PrepStartTime int64  `json:"prep_start_time"`
+			PrepStartTime int64  `json:"prepStartTime"`
 		}{
 			BaseEvent:     baseEvent,
 			OrderID:       order.ID,
@@ -384,7 +384,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			BaseEvent
 			OrderID    string `json:"orderId"`
 			Status     string `json:"status"`
-			PickupTime int64  `json:"pickup_time"`
+			PickupTime int64  `json:"pickupTime"`
 		}{
 			BaseEvent:  baseEvent,
 			OrderID:    order.ID,
@@ -402,7 +402,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			BaseEvent
 			OrderID             string `json:"orderId"`
 			Status              string `json:"status"`
-			EstimatedPickupTime int64  `json:"estimated_pickup_time"`
+			EstimatedPickupTime int64  `json:"estimatedPickupTime"`
 		}{
 			BaseEvent:           baseEvent,
 			OrderID:             order.ID,
@@ -420,8 +420,8 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			BaseEvent
 			OrderID               string `json:"orderId"`
 			Status                string `json:"status"`
-			PickupTime            int64  `json:"pickup_time"`
-			EstimatedDeliveryTime int64  `json:"estimated_delivery_time"`
+			PickupTime            int64  `json:"pickupTime"`
+			EstimatedDeliveryTime int64  `json:"estimatedDeliveryTime"`
 		}{
 			BaseEvent:             baseEvent,
 			OrderID:               order.ID,
@@ -508,9 +508,9 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			BaseEvent
 			OrderID               string          `json:"orderId"`
 			Status                string          `json:"status"`
-			EstimatedDeliveryTime int64           `json:"estimated_delivery_time"`
-			CurrentLocation       models.Location `json:"current_location"`
-			NextCheckTime         int64           `json:"next_check_time"`
+			EstimatedDeliveryTime int64           `json:"estimatedDeliveryTime"`
+			CurrentLocation       models.Location `json:"currentLocation"`
+			NextCheckTime         int64           `json:"nextCheckTime"`
 		}{
 			BaseEvent:             baseEvent,
 			OrderID:               order.ID,
@@ -532,7 +532,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			OrderID               string `json:"orderId"`
 			Status                string `json:"status"`
 			EstimatedDeliveryTime int64  `json:"estimatedDeliveryTime"`
-			ActualDeliveryTime    int64  `json:"actual_delivery_time"`
+			ActualDeliveryTime    int64  `json:"actualDeliveryTime"`
 		}{
 			BaseEvent:             baseEvent,
 			OrderID:               order.ID,
@@ -551,7 +551,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			BaseEvent
 			OrderID          string `json:"orderId"`
 			Status           string `json:"status"`
-			CancellationTime int64  `json:"cancellation_time"`
+			CancellationTime int64  `json:"cancellationTime"`
 		}{
 			BaseEvent:        baseEvent,
 			OrderID:          order.ID,
@@ -598,7 +598,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		eventData = struct {
 			BaseEvent
 			Capacity int     `json:"capacity"`
-			PrepTime float64 `json:"prep_time"`
+			PrepTime float64 `json:"prepTime"`
 		}{
 			BaseEvent: baseEvent,
 			Capacity:  restaurant.Capacity,
@@ -609,13 +609,13 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 	case models.EventGenerateReview:
 		order := event.Data.(*models.Order)
 
-		// Create the review
+		// create the review
 		review := s.createReview(order)
 
-		// Add the review to the simulator's reviews
+		// add the review to the simulator's reviews
 		s.Reviews = append(s.Reviews, review)
 
-		// Update ratings based on the review
+		// update ratings based on the review
 		s.updateRatings(review)
 
 		eventData = struct {
@@ -1006,6 +1006,7 @@ func (s *Simulator) handleCheckDeliveryStatus(order *models.Order) {
 	if distance <= deliveryThreshold {
 		// order has been delivered
 		s.handleDeliverOrder(order)
+		return
 	} else {
 		// calculate duration since last update
 		duration := s.CurrentTime.Sub(partner.LastUpdateTime)
@@ -1115,7 +1116,7 @@ func (s *Simulator) handleDeliverOrder(order *models.Order) {
 	log.Printf("Order %s delivered to user %s at %s",
 		order.ID, user.ID, s.CurrentTime.Format(time.RFC3339))
 
-	// Ensure this event is being serialized and written
+	// ensure this event is being serialized and written
 	eventMsg, err := s.serializeEvent(models.Event{
 		Time: s.CurrentTime,
 		Type: models.EventDeliverOrder,
