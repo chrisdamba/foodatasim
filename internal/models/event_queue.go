@@ -2,6 +2,7 @@ package models
 
 import (
 	"container/heap"
+	"sync"
 	"time"
 )
 
@@ -41,6 +42,7 @@ type Event struct {
 // EventQueue is a priority queue of events
 type EventQueue struct {
 	events []*Event
+	mutex  sync.Mutex
 }
 
 // eventHeap implements heap.Interface and holds Events
@@ -69,11 +71,15 @@ func NewEventQueue() *EventQueue {
 
 // Enqueue adds an event to the queue
 func (eq *EventQueue) Enqueue(event *Event) {
+	eq.mutex.Lock()
+	defer eq.mutex.Unlock()
 	heap.Push((*eventHeap)(&eq.events), event)
 }
 
 // Dequeue removes and returns the earliest event from the queue
 func (eq *EventQueue) Dequeue() *Event {
+	eq.mutex.Lock()
+	defer eq.mutex.Unlock()
 	if len(eq.events) == 0 {
 		return nil
 	}
@@ -82,6 +88,8 @@ func (eq *EventQueue) Dequeue() *Event {
 
 // Peek returns the earliest event without removing it
 func (eq *EventQueue) Peek() *Event {
+	eq.mutex.Lock()
+	defer eq.mutex.Unlock()
 	if len(eq.events) == 0 {
 		return nil
 	}
@@ -90,10 +98,36 @@ func (eq *EventQueue) Peek() *Event {
 
 // IsEmpty returns true if the queue is empty
 func (eq *EventQueue) IsEmpty() bool {
+	eq.mutex.Lock()
+	defer eq.mutex.Unlock()
 	return len(eq.events) == 0
 }
 
 // Len returns the number of events in the queue
 func (eq *EventQueue) Len() int {
+	eq.mutex.Lock()
+	defer eq.mutex.Unlock()
 	return len(eq.events)
+}
+
+func (eq *EventQueue) DequeueBatch(maxBatchSize int) []*Event {
+	eq.mutex.Lock()
+	defer eq.mutex.Unlock()
+
+	batchSize := min(maxBatchSize, len(eq.events))
+	batch := make([]*Event, 0, batchSize)
+
+	for i := 0; i < batchSize; i++ {
+		event := heap.Pop((*eventHeap)(&eq.events)).(*Event)
+		batch = append(batch, event)
+	}
+
+	return batch
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

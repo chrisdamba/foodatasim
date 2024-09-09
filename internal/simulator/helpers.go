@@ -1158,7 +1158,7 @@ func (s *Simulator) calculateDeliveryFee(subtotal float64) float64 {
 }
 
 func (s *Simulator) updateRestaurantMetrics(restaurant *models.Restaurant) {
-	// Update average prep time
+	// update average prep time
 	totalPrepTime := 0.0
 	for _, order := range restaurant.CurrentOrders {
 		if order.PrepStartTime.After(time.Time{}) && order.PickupTime.After(time.Time{}) {
@@ -1169,10 +1169,10 @@ func (s *Simulator) updateRestaurantMetrics(restaurant *models.Restaurant) {
 		restaurant.AvgPrepTime = totalPrepTime / float64(len(restaurant.CurrentOrders))
 	}
 
-	// Update restaurant efficiency
+	// update restaurant efficiency
 	restaurant.PickupEfficiency = s.adjustPickupEfficiency(restaurant)
 
-	// Update restaurant capacity
+	// update restaurant capacity
 	restaurant.Capacity = int(float64(restaurant.Capacity) * restaurant.PickupEfficiency)
 }
 
@@ -1468,9 +1468,9 @@ func (s *Simulator) adjustPrepTime(restaurant *models.Restaurant) float64 {
 }
 
 func (s *Simulator) adjustPickupEfficiency(restaurant *models.Restaurant) float64 {
-	recentOrders := s.getRecentCompletedOrders(restaurant.ID, 20) // Consider last 20 orders
+	recentOrders := s.getRecentCompletedOrders(restaurant.ID, 20) // consider last 20 orders
 	if len(recentOrders) == 0 {
-		return restaurant.PickupEfficiency // No recent orders, no change
+		return restaurant.PickupEfficiency // no recent orders, no change
 	}
 
 	var totalEfficiency float64
@@ -1481,7 +1481,7 @@ func (s *Simulator) adjustPickupEfficiency(restaurant *models.Restaurant) float6
 	}
 	avgEfficiency := totalEfficiency / float64(len(recentOrders))
 
-	// Gradually adjust towards new efficiency
+	// gradually adjust towards new efficiency
 	return restaurant.PickupEfficiency + (avgEfficiency-restaurant.PickupEfficiency)*s.Config.EfficiencyAdjustRate
 }
 
@@ -1510,9 +1510,9 @@ func (s *Simulator) getRecentOrders(userID string, count int) []models.Order {
 func (s *Simulator) getRecentCompletedOrders(restaurantID string, count int) []models.Order {
 	var recentCompletedOrders []models.Order
 
-	// Iterate through orders in reverse (assuming orders are stored chronologically)
+	// iterate through orders in reverse (assuming orders are stored chronologically)
 	for i := len(s.Orders) - 1; i >= 0 && len(recentCompletedOrders) < count; i-- {
-		if s.Orders[i].RestaurantID == restaurantID && s.Orders[i].Status == "delivered" {
+		if s.Orders[i].RestaurantID == restaurantID && s.Orders[i].Status == models.OrderStatusDelivered {
 			recentCompletedOrders = append(recentCompletedOrders, s.Orders[i])
 		}
 	}

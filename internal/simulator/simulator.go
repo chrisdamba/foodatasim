@@ -7,12 +7,15 @@ import (
 	"github.com/chrisdamba/foodatasim/internal/factories"
 	"github.com/chrisdamba/foodatasim/internal/models"
 	"github.com/jaswdr/faker"
+	"github.com/schollz/progressbar/v3"
 	"io"
 	"log"
 	"math"
 	"math/rand"
 	"os"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -213,10 +216,41 @@ func (s *Simulator) Run() {
 	s.initializeData()
 	log.Printf("Simulation starts from %s to %s\n", s.CurrentTime.Format(time.RFC3339), s.Config.EndDate.Format(time.RFC3339))
 
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(1 * time.Millisecond)
 	defer ticker.Stop()
 
 	var eventsCount int
+	var eventsCountMutex sync.Mutex
+
+	// create a worker pool
+	numWorkers := runtime.NumCPU() // use number of CPUs as worker count
+	jobs := make(chan *models.Event, numWorkers)
+	var wg sync.WaitGroup
+
+	// start worker goroutines
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for event := range jobs {
+				s.processEvent(event)
+				eventMsg, err := s.serializeEvent(*event)
+				if err != nil {
+					log.Printf("Error serializing event: %v", err)
+					continue
+				}
+				if err := output.WriteMessage(eventMsg.Topic, eventMsg.Message); err != nil {
+					log.Printf("Failed to write message: %v", err)
+				}
+				eventsCountMutex.Lock()
+				eventsCount++
+				eventsCountMutex.Unlock()
+			}
+		}()
+	}
+
+	totalDuration := s.Config.EndDate.Sub(s.CurrentTime)
+	bar := progressbar.Default(100)
 
 	for s.CurrentTime.Before(s.Config.EndDate) {
 		select {
@@ -227,20 +261,9 @@ func (s *Simulator) Run() {
 				if nextEvent == nil || nextEvent.Time.After(s.CurrentTime) {
 					break
 				}
-				event := s.EventQueue.Dequeue()
-				if event != nil {
-					s.processEvent(event)
-					eventsCount++
-
-					// serialize and write the event
-					eventMsg, err := s.serializeEvent(*event)
-					if err != nil {
-						log.Printf("Error serializing event: %v", err)
-						continue
-					}
-					if err := output.WriteMessage(eventMsg.Topic, eventMsg.Message); err != nil {
-						log.Printf("Failed to write message: %v", err)
-					}
+				batch := s.EventQueue.DequeueBatch(100)
+				for _, event := range batch {
+					jobs <- event // send event to worker pool
 				}
 			}
 			// run time-step simulation
@@ -252,17 +275,25 @@ func (s *Simulator) Run() {
 			s.removeCompletedOrders()
 
 			// show progress
+			eventsCountMutex.Lock()
 			s.showProgress(eventsCount)
+			eventsCountMutex.Unlock()
+
+			progress := float64(s.CurrentTime.Sub(s.Config.StartDate)) / float64(totalDuration)
+			bar.Set(int(progress * 100))
 
 			// advance simulation time
-			s.CurrentTime = s.CurrentTime.Add(1 * time.Minute)
+			s.CurrentTime = s.CurrentTime.Add(10 * time.Minute)
 
 		default:
 			// if there are no events to process and no time has passed,
 			// we can sleep for a short duration to avoid busy-waiting
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(1 * time.Millisecond)
 		}
 	}
+	// close the jobs channel and wait for all workers to finish
+	close(jobs)
+	wg.Wait()
 
 	log.Printf("Simulation completed at %s\n", time.Now().UTC().Format(time.RFC3339))
 }
@@ -1016,7 +1047,7 @@ func (s *Simulator) handleCheckDeliveryStatus(order *models.Order) {
 		partner.LastUpdateTime = s.CurrentTime
 
 		// order is still in transit, schedule next check
-		nextCheckTime := s.CurrentTime.Add(5 * time.Minute)
+		nextCheckTime := s.CurrentTime.Add(15 * time.Minute)
 		s.EventQueue.Enqueue(&models.Event{
 			Time: nextCheckTime,
 			Type: models.EventCheckDeliveryStatus,
