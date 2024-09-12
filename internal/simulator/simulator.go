@@ -3,7 +3,6 @@ package simulator
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/IBM/sarama"
 	"github.com/chrisdamba/foodatasim/internal/factories"
 	"github.com/chrisdamba/foodatasim/internal/models"
 	"github.com/jaswdr/faker"
@@ -12,35 +11,11 @@ import (
 	"log"
 	"math"
 	"math/rand"
-	"os"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 )
-
-type OutputDestination interface {
-	WriteMessage(topic string, msg []byte) error
-}
-
-type ConsoleOutput struct{}
-
-type KafkaOutput struct {
-	producer sarama.SyncProducer
-}
-
-type FileOutput struct {
-	files    map[string]*os.File
-	basePath string // Base directory for output files
-}
-
-// NewFileOutput creates a new FileOutput instance with initialized values.
-func NewFileOutput(basePath string) *FileOutput {
-	return &FileOutput{
-		files:    make(map[string]*os.File),
-		basePath: basePath,
-	}
-}
 
 type Simulator struct {
 	Config                      *models.Config
@@ -70,54 +45,6 @@ func NewSimulator(config *models.Config) *Simulator {
 		EventQueue:       models.NewEventQueue(),
 	}
 	return sim
-}
-
-func (f *FileOutput) WriteMessage(topic string, msg []byte) error {
-	// Check if the file already exists in the map
-	if _, ok := f.files[topic]; !ok {
-		// If not, create the file
-		filename := fmt.Sprintf("%s/%s.txt", f.basePath, topic)
-		file, err := os.Create(filename)
-		if err != nil {
-			return fmt.Errorf("failed to create file for topic %s: %w", topic, err)
-		}
-		f.files[topic] = file
-	}
-
-	// Write the message to the corresponding file
-	_, err := f.files[topic].Write(msg)
-	if err != nil {
-		return fmt.Errorf("failed to write message to topic %s: %w", topic, err)
-	}
-
-	return nil
-}
-
-func (k *KafkaOutput) WriteMessage(topic string, msg []byte) error {
-	if k.producer == nil {
-		return fmt.Errorf("Kafka producer is closed")
-	}
-	_, _, err := k.producer.SendMessage(&sarama.ProducerMessage{
-		Topic: topic,
-		Value: sarama.ByteEncoder(msg),
-	})
-	return err
-}
-
-func (c *ConsoleOutput) WriteMessage(topic string, msg []byte) error {
-	// Create a formatted string that includes the topic
-	output := fmt.Sprintf("[%s] %s\n", topic, string(msg))
-
-	// Write the formatted string to stdout
-	_, err := os.Stdout.Write([]byte(output))
-	if err != nil {
-		return fmt.Errorf("failed to write to stdout: %w", err)
-	}
-
-	// Try to sync, but don't return an error if it fails
-	_ = os.Stdout.Sync()
-
-	return nil
 }
 
 func (s *Simulator) initializeData() {
@@ -202,102 +129,6 @@ func (s *Simulator) processEvent(event *models.Event) {
 	}
 }
 
-func (s *Simulator) Run() {
-	output := s.determineOutputDestination()
-	defer func() {
-		if closer, ok := output.(io.Closer); ok {
-			err := closer.Close()
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	s.initializeData()
-	log.Printf("Simulation starts from %s to %s\n", s.CurrentTime.Format(time.RFC3339), s.Config.EndDate.Format(time.RFC3339))
-
-	ticker := time.NewTicker(1 * time.Millisecond)
-	defer ticker.Stop()
-
-	var eventsCount int
-	var eventsCountMutex sync.Mutex
-
-	// create a worker pool
-	numWorkers := runtime.NumCPU() // use number of CPUs as worker count
-	jobs := make(chan *models.Event, numWorkers)
-	var wg sync.WaitGroup
-
-	// start worker goroutines
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for event := range jobs {
-				s.processEvent(event)
-				eventMsg, err := s.serializeEvent(*event)
-				if err != nil {
-					log.Printf("Error serializing event: %v", err)
-					continue
-				}
-				if err := output.WriteMessage(eventMsg.Topic, eventMsg.Message); err != nil {
-					log.Printf("Failed to write message: %v", err)
-				}
-				eventsCountMutex.Lock()
-				eventsCount++
-				eventsCountMutex.Unlock()
-			}
-		}()
-	}
-
-	totalDuration := s.Config.EndDate.Sub(s.CurrentTime)
-	bar := progressbar.Default(100)
-
-	for s.CurrentTime.Before(s.Config.EndDate) {
-		select {
-		case <-ticker.C:
-			// process any events that are due
-			for {
-				nextEvent := s.EventQueue.Peek()
-				if nextEvent == nil || nextEvent.Time.After(s.CurrentTime) {
-					break
-				}
-				batch := s.EventQueue.DequeueBatch(100)
-				for _, event := range batch {
-					jobs <- event // send event to worker pool
-				}
-			}
-			// run time-step simulation
-			s.simulateTimeStep()
-
-			// cancel stale orders and cleanup simulation state
-			s.cancelStaleOrders()
-			s.cleanupSimulationState()
-			s.removeCompletedOrders()
-
-			// show progress
-			eventsCountMutex.Lock()
-			s.showProgress(eventsCount)
-			eventsCountMutex.Unlock()
-
-			progress := float64(s.CurrentTime.Sub(s.Config.StartDate)) / float64(totalDuration)
-			bar.Set(int(progress * 100))
-
-			// advance simulation time
-			s.CurrentTime = s.CurrentTime.Add(10 * time.Minute)
-
-		default:
-			// if there are no events to process and no time has passed,
-			// we can sleep for a short duration to avoid busy-waiting
-			time.Sleep(1 * time.Millisecond)
-		}
-	}
-	// close the jobs channel and wait for all workers to finish
-	close(jobs)
-	wg.Wait()
-
-	log.Printf("Simulation completed at %s\n", time.Now().UTC().Format(time.RFC3339))
-}
-
 func (s *Simulator) simulateTimeStep() {
 	s.updateTrafficConditions()
 	s.generateOrders()
@@ -307,60 +138,17 @@ func (s *Simulator) simulateTimeStep() {
 	s.updateRestaurantStatus()
 }
 
-func createKafkaProducer(brokerList []string) (sarama.SyncProducer, error) {
-	config := sarama.NewConfig()
-	config.Producer.RequiredAcks = sarama.WaitForAll
-	config.Producer.Retry.Max = 5
-	config.Producer.Retry.Backoff = 100 * time.Millisecond
-	config.Producer.Return.Successes = true
-	config.Net.DialTimeout = 30 * time.Second
-	config.Net.ReadTimeout = 30 * time.Second
-	config.Net.WriteTimeout = 30 * time.Second
-
-	producer, err := sarama.NewSyncProducer(brokerList, config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Kafka producer: %w", err)
-	}
-	return producer, nil
-}
-
-func (s *Simulator) determineOutputDestination() OutputDestination {
-	if s.Config.KafkaEnabled {
-		brokerList := strings.Split(s.Config.KafkaBrokerList, ",")
-		producer, err := createKafkaProducer(brokerList)
-		if err != nil {
-			log.Fatalf("Failed to create Kafka producer: %s", err)
-		}
-		return &KafkaOutput{producer: producer}
-	} else if s.Config.OutputFile != "" {
-		return NewFileOutput(s.Config.OutputFile)
-	}
-	return &ConsoleOutput{}
-}
-
 func (s *Simulator) showProgress(eventsCount int) {
-	if eventsCount%1000 == 0 {
+	if eventsCount%100 == 0 {
 		log.Printf("Current time: %s, Events processed: %d", s.CurrentTime.Format(time.RFC3339), eventsCount)
 	}
 }
 
 func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, error) {
-	var topic string
 	var eventData interface{}
+	var topic string
 
-	// base event structure that all events will have
-	type BaseEvent struct {
-		Timestamp    int64  `json:"timestamp"`
-		EventType    string `json:"eventType"`
-		UserID       string `json:"userId,omitempty"`
-		RestaurantID string `json:"restaurantId,omitempty"`
-		DeliveryID   string `json:"deliveryPartnerId,omitempty"`
-	}
-
-	baseEvent := BaseEvent{
-		Timestamp: event.Time.Unix(),
-		EventType: event.Type,
-	}
+	baseEvent := NewBaseEvent(event.Type, event.Time)
 
 	switch event.Type {
 	case models.EventPlaceOrder:
@@ -373,17 +161,10 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		}
 		baseEvent.RestaurantID = order.RestaurantID
 
-		eventData = struct {
-			BaseEvent
-			OrderID       string   `json:"orderId"`
-			Items         []string `json:"itemIds"`
-			TotalAmount   float64  `json:"totalAmount"`
-			Status        string   `json:"status"`
-			OrderPlacedAt int64    `json:"orderPlacedAt"`
-		}{
+		eventData = OrderPlacedEvent{
 			BaseEvent:     baseEvent,
 			OrderID:       order.ID,
-			Items:         order.Items,
+			Items:         strings.Join(order.Items, ","),
 			TotalAmount:   order.TotalAmount,
 			Status:        order.Status,
 			OrderPlacedAt: order.OrderPlacedAt.Unix(),
@@ -394,12 +175,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		order := event.Data.(*models.Order)
 		baseEvent.RestaurantID = order.RestaurantID
 
-		eventData = struct {
-			BaseEvent
-			OrderID       string `json:"orderId"`
-			Status        string `json:"status"`
-			PrepStartTime int64  `json:"prepStartTime"`
-		}{
+		eventData = OrderPreparationEvent{
 			BaseEvent:     baseEvent,
 			OrderID:       order.ID,
 			Status:        order.Status,
@@ -411,12 +187,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		order := event.Data.(*models.Order)
 		baseEvent.RestaurantID = order.RestaurantID
 
-		eventData = struct {
-			BaseEvent
-			OrderID    string `json:"orderId"`
-			Status     string `json:"status"`
-			PickupTime int64  `json:"pickupTime"`
-		}{
+		eventData = OrderReadyEvent{
 			BaseEvent:  baseEvent,
 			OrderID:    order.ID,
 			Status:     order.Status,
@@ -429,12 +200,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		baseEvent.RestaurantID = order.RestaurantID
 		baseEvent.DeliveryID = order.DeliveryPartnerID
 
-		eventData = struct {
-			BaseEvent
-			OrderID             string `json:"orderId"`
-			Status              string `json:"status"`
-			EstimatedPickupTime int64  `json:"estimatedPickupTime"`
-		}{
+		eventData = DeliveryPartnerAssignmentEvent{
 			BaseEvent:           baseEvent,
 			OrderID:             order.ID,
 			Status:              order.Status,
@@ -447,13 +213,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		baseEvent.RestaurantID = order.RestaurantID
 		baseEvent.DeliveryID = order.DeliveryPartnerID
 
-		eventData = struct {
-			BaseEvent
-			OrderID               string `json:"orderId"`
-			Status                string `json:"status"`
-			PickupTime            int64  `json:"pickupTime"`
-			EstimatedDeliveryTime int64  `json:"estimatedDeliveryTime"`
-		}{
+		eventData = OrderPickupEvent{
 			BaseEvent:             baseEvent,
 			OrderID:               order.ID,
 			Status:                order.Status,
@@ -469,20 +229,12 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			return models.EventMessage{}, fmt.Errorf("partner not found: %s", update.PartnerID)
 		}
 
-		eventData = struct {
-			BaseEvent
-			PartnerID    string          `json:"partnerId"`
-			OrderID      string          `json:"orderId,omitempty"`
-			NewLocation  models.Location `json:"newLocation"`
-			CurrentOrder string          `json:"currentOrder,omitempty"`
-			Status       string          `json:"status"`
-			UpdateTime   int64           `json:"updateTime"`
-			Speed        float64         `json:"speed,omitempty"`
-		}{
-			BaseEvent:    baseEvent,
+		eventData = PartnerLocationUpdateEvent{
+			Timestamp:    event.Time.Unix(),
+			EventType:    event.Type,
 			PartnerID:    update.PartnerID,
 			OrderID:      update.OrderID,
-			NewLocation:  update.NewLocation,
+			NewLocation:  models.Location{Lat: update.NewLocation.Lat, Lon: update.NewLocation.Lon},
 			CurrentOrder: partner.CurrentOrderID,
 			Status:       partner.Status,
 			UpdateTime:   s.CurrentTime.Unix(),
@@ -497,23 +249,12 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			return models.EventMessage{}, fmt.Errorf("delivery partner not found for order %s", order.ID)
 		}
 
-		eventData = struct {
-			BaseEvent
-			OrderID               string          `json:"orderId"`
-			DeliveryPartnerID     string          `json:"deliveryPartnerId"`
-			RestaurantID          string          `json:"restaurantId"`
-			CustomerID            string          `json:"customerId"`
-			CurrentLocation       models.Location `json:"currentLocation"`
-			EstimatedDeliveryTime int64           `json:"estimatedDeliveryTime"`
-			PickupTime            int64           `json:"pickupTime"`
-			Status                string          `json:"status"`
-		}{
+		eventData = OrderInTransitEvent{
 			BaseEvent:             baseEvent,
 			OrderID:               order.ID,
 			DeliveryPartnerID:     order.DeliveryPartnerID,
-			RestaurantID:          order.RestaurantID,
 			CustomerID:            order.CustomerID,
-			CurrentLocation:       partner.CurrentLocation,
+			CurrentLocation:       models.Location{Lat: partner.CurrentLocation.Lat, Lon: partner.CurrentLocation.Lon},
 			EstimatedDeliveryTime: order.EstimatedDeliveryTime.Unix(),
 			PickupTime:            order.PickupTime.Unix(),
 			Status:                order.Status,
@@ -532,17 +273,10 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		partner := s.getDeliveryPartner(order.DeliveryPartnerID)
 		var currentLocation models.Location
 		if partner != nil {
-			currentLocation = partner.CurrentLocation
+			currentLocation = models.Location{Lat: partner.CurrentLocation.Lat, Lon: partner.CurrentLocation.Lon}
 		}
 
-		eventData = struct {
-			BaseEvent
-			OrderID               string          `json:"orderId"`
-			Status                string          `json:"status"`
-			EstimatedDeliveryTime int64           `json:"estimatedDeliveryTime"`
-			CurrentLocation       models.Location `json:"currentLocation"`
-			NextCheckTime         int64           `json:"nextCheckTime"`
-		}{
+		eventData = DeliveryStatusCheckEvent{
 			BaseEvent:             baseEvent,
 			OrderID:               order.ID,
 			Status:                order.Status,
@@ -558,13 +292,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		baseEvent.DeliveryID = order.DeliveryPartnerID
 		baseEvent.UserID = order.CustomerID
 
-		eventData = struct {
-			BaseEvent
-			OrderID               string `json:"orderId"`
-			Status                string `json:"status"`
-			EstimatedDeliveryTime int64  `json:"estimatedDeliveryTime"`
-			ActualDeliveryTime    int64  `json:"actualDeliveryTime"`
-		}{
+		eventData = OrderDeliveryEvent{
 			BaseEvent:             baseEvent,
 			OrderID:               order.ID,
 			Status:                order.Status,
@@ -578,12 +306,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		baseEvent.RestaurantID = order.RestaurantID
 		baseEvent.UserID = order.CustomerID
 
-		eventData = struct {
-			BaseEvent
-			OrderID          string `json:"orderId"`
-			Status           string `json:"status"`
-			CancellationTime int64  `json:"cancellationTime"`
-		}{
+		eventData = OrderCancellationEvent{
 			BaseEvent:        baseEvent,
 			OrderID:          order.ID,
 			Status:           order.Status,
@@ -598,20 +321,23 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			return models.EventMessage{}, fmt.Errorf("user not found: %s", update.UserID)
 		}
 
-		userBehaviorEvent := struct {
-			BaseEvent
-			UserID         string  `json:"userId"`
-			OrderFrequency float64 `json:"orderFrequency"`
-			LastOrderTime  int64   `json:"lastOrderTime,omitempty"`
-		}{
-			BaseEvent:      baseEvent,
-			UserID:         update.UserID,
-			OrderFrequency: update.OrderFrequency,
+		timestamp := event.Time.Unix()
+		eventType := event.Type
+		userId := update.UserID
+		orderFrequency := update.OrderFrequency
+		lastOrderTime := safeUnixTime(user.LastOrderTime)
+
+		userBehaviorEvent := UserBehaviourUpdateEvent{
+			Timestamp:      &timestamp,
+			EventType:      &eventType,
+			UserID:         &userId,
+			OrderFrequency: &orderFrequency,
 		}
 
 		// only include LastOrderTime if it's not the zero value
 		if !user.LastOrderTime.IsZero() {
-			userBehaviorEvent.LastOrderTime = user.LastOrderTime.Unix()
+			lastOrderTime = safeUnixTime(user.LastOrderTime)
+			userBehaviorEvent.LastOrderTime = &lastOrderTime
 		}
 
 		eventData = userBehaviorEvent
@@ -626,20 +352,19 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			prepTime = restaurant.MinPrepTime
 		}
 
-		eventData = struct {
-			BaseEvent
-			Capacity int     `json:"capacity"`
-			PrepTime float64 `json:"prepTime"`
-		}{
+		capacity := restaurant.Capacity
+		eventData = RestaurantStatusUpdateEvent{
 			BaseEvent: baseEvent,
-			Capacity:  restaurant.Capacity,
-			PrepTime:  prepTime,
+			Capacity:  &capacity,
+			PrepTime:  &prepTime,
 		}
 		topic = "restaurant_status_events"
 
 	case models.EventGenerateReview:
 		order := event.Data.(*models.Order)
-
+		baseEvent.RestaurantID = order.RestaurantID
+		baseEvent.DeliveryID = order.DeliveryPartnerID
+		baseEvent.UserID = order.CustomerID
 		// create the review
 		review := s.createReview(order)
 
@@ -649,26 +374,11 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		// update ratings based on the review
 		s.updateRatings(review)
 
-		eventData = struct {
-			BaseEvent
-			ReviewID          string  `json:"reviewId"`
-			OrderID           string  `json:"orderId"`
-			CustomerID        string  `json:"customerId"`
-			RestaurantID      string  `json:"restaurantId"`
-			DeliveryPartnerID string  `json:"deliveryPartnerId"`
-			FoodRating        float64 `json:"foodRating"`
-			DeliveryRating    float64 `json:"deliveryRating"`
-			OverallRating     float64 `json:"overallRating"`
-			Comment           string  `json:"comment"`
-			CreatedAt         int64   `json:"createdAt"`
-			OrderTotal        float64 `json:"orderTotal"`
-			DeliveryTime      int64   `json:"deliveryTime"`
-		}{
+		eventData = ReviewEvent{
 			BaseEvent:         baseEvent,
 			ReviewID:          review.ID,
 			OrderID:           review.OrderID,
 			CustomerID:        review.CustomerID,
-			RestaurantID:      review.RestaurantID,
 			DeliveryPartnerID: review.DeliveryPartnerID,
 			FoodRating:        review.FoodRating,
 			DeliveryRating:    review.DeliveryRating,
@@ -1047,7 +757,7 @@ func (s *Simulator) handleCheckDeliveryStatus(order *models.Order) {
 		partner.LastUpdateTime = s.CurrentTime
 
 		// order is still in transit, schedule next check
-		nextCheckTime := s.CurrentTime.Add(15 * time.Minute)
+		nextCheckTime := s.CurrentTime.Add(5 * time.Minute)
 		s.EventQueue.Enqueue(&models.Event{
 			Time: nextCheckTime,
 			Type: models.EventCheckDeliveryStatus,
@@ -1187,4 +897,100 @@ func (s *Simulator) handleGenerateReview(order *models.Order) {
 	order.ReviewGenerated = true
 
 	log.Printf("Review generation for order %s scheduled. %.1f", order.ID)
+}
+
+func (s *Simulator) Run() {
+	output := s.determineOutputDestination()
+	defer func() {
+		if closer, ok := output.(io.Closer); ok {
+			err := closer.Close()
+			if err != nil {
+				log.Printf("Error closing output: %v", err)
+				return
+			}
+		}
+	}()
+
+	s.initializeData()
+	log.Printf("Simulation starts from %s to %s\n", s.CurrentTime.Format(time.RFC3339), s.Config.EndDate.Format(time.RFC3339))
+
+	ticker := time.NewTicker(1 * time.Millisecond)
+	defer ticker.Stop()
+
+	var eventsCount int
+	var eventsCountMutex sync.Mutex
+
+	// create a worker pool
+	numWorkers := runtime.NumCPU() // use number of CPUs as worker count
+	jobs := make(chan *models.Event, numWorkers)
+	var wg sync.WaitGroup
+
+	// start worker goroutines
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for event := range jobs {
+				s.processEvent(event)
+				eventMsg, err := s.serializeEvent(*event)
+				if err != nil {
+					log.Printf("Error serializing event: %v", err)
+					continue
+				}
+				if err := output.WriteMessage(eventMsg.Topic, eventMsg.Message); err != nil {
+					log.Printf("Failed to write message: %v", err)
+				}
+				eventsCount++
+			}
+		}()
+	}
+
+	totalDuration := s.Config.EndDate.Sub(s.CurrentTime)
+	bar := progressbar.Default(100)
+
+	for s.CurrentTime.Before(s.Config.EndDate) {
+		select {
+		case <-ticker.C:
+			// process any events that are due
+			for {
+				nextEvent := s.EventQueue.Peek()
+				if nextEvent == nil || nextEvent.Time.After(s.CurrentTime) {
+					break
+				}
+				batch := s.EventQueue.DequeueBatch(100)
+				for _, event := range batch {
+					jobs <- event // send event to worker pool
+				}
+			}
+			// run time-step simulation
+			s.simulateTimeStep()
+
+			// cancel stale orders and cleanup simulation state
+			s.cancelStaleOrders()
+			s.cleanupSimulationState()
+			s.removeCompletedOrders()
+
+			// show progress
+			eventsCountMutex.Lock()
+			s.showProgress(eventsCount)
+			eventsCountMutex.Unlock()
+
+			progress := float64(s.CurrentTime.Sub(s.Config.StartDate)) / float64(totalDuration)
+			bar.Set(int(progress * 100))
+
+			// advance simulation time
+			s.CurrentTime = s.CurrentTime.Add(10 * time.Minute)
+
+		default:
+			// if there are no events to process and no time has passed,
+			// we can sleep for a short duration to avoid busy-waiting
+			time.Sleep(1 * time.Millisecond)
+		}
+	}
+	// close the jobs channel and wait for all workers to finish
+	close(jobs)
+	wg.Wait()
+
+	log.Printf("Simulation completed at %s\n", time.Now().UTC().Format(time.RFC3339))
+	defer s.CloseKafkaProducer(output)
 }

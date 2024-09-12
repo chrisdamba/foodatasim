@@ -1,8 +1,8 @@
 package models
 
 type Location struct {
-	Lat float64 `json:"lat"`
-	Lon float64 `json:"lon"`
+	Lat float64 `json:"lat" parquet:"name=lat,type=DOUBLE"`
+	Lon float64 `json:"lon" parquet:"name=lon,type=DOUBLE"`
 }
 
 // Hotspot represents a location with high demand for food delivery
