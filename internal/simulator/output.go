@@ -4,10 +4,13 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"github.com/chrisdamba/foodatasim/internal/cloudwriter"
+	"github.com/chrisdamba/foodatasim/internal/models"
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/xitongsys/parquet-go-source/local"
 	"github.com/xitongsys/parquet-go/source"
 	"github.com/xitongsys/parquet-go/writer"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -28,12 +31,14 @@ type CSVOutput struct {
 }
 
 type ParquetOutput struct {
-	basePath      string
-	folder        string
-	mu            sync.Mutex
-	writers       map[string]*writer.ParquetWriter
-	writerMutexes map[string]*sync.Mutex
-	files         map[string]source.ParquetFile
+	basePath           string
+	folder             string
+	mu                 sync.Mutex
+	writers            map[string]*writer.ParquetWriter
+	writerMutexes      map[string]*sync.Mutex
+	files              map[string]source.ParquetFile
+	cloudWriterFactory cloudwriter.CloudWriterFactory
+	cloudBucketName    string
 }
 
 type ConsoleOutput struct{}
@@ -46,6 +51,24 @@ type JSONOutput struct {
 	basePath string
 	folder   string
 	files    map[string]*os.File
+}
+
+type CloudParquetFile struct {
+	cloudWriter cloudwriter.CloudWriter
+	offset      int64
+}
+
+func (c *CloudParquetFile) Open(name string) (source.ParquetFile, error) {
+	// for cloud storage, we don't typically "open" files in the same way as local files.
+	// instead, we can return the current instance, as it's already set up for writing.
+	return c, nil
+}
+
+func (c *CloudParquetFile) Create(name string) (source.ParquetFile, error) {
+	// similar to Open, for cloud storage, we don't typically "create" files.
+	// the file (or object) is implicitly created when we start writing.
+	// we can return the current instance, ready for writing.
+	return c, nil
 }
 
 func NewCSVOutput(basePath, folder string) *CSVOutput {
@@ -65,19 +88,73 @@ func NewJSONOutput(basePath, folder string) *JSONOutput {
 	}
 }
 
-func NewParquetOutput(basePath, folder string) *ParquetOutput {
+func NewParquetOutput(config *models.Config) (*ParquetOutput, error) {
 	p := &ParquetOutput{
-		basePath:      basePath,
-		folder:        folder,
+		basePath:      config.OutputPath,
+		folder:        config.OutputFolder,
 		writers:       make(map[string]*writer.ParquetWriter),
 		writerMutexes: make(map[string]*sync.Mutex),
 		files:         make(map[string]source.ParquetFile),
 	}
 
+	if config.OutputDestination != "local" {
+		var factory cloudwriter.CloudWriterFactory
+		var err error
+
+		switch config.CloudStorage.Provider {
+		case "gcs":
+		case "s3":
+			factory, err = cloudwriter.NewS3WriterFactory(config.CloudStorage.Region)
+		case "azure":
+		default:
+			return nil, fmt.Errorf("unsupported cloud storage provider: %s", config.CloudStorage.Provider)
+		}
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to create cloud writer factory: %w", err)
+		}
+
+		p.cloudWriterFactory = factory
+		p.cloudBucketName = config.CloudStorage.BucketName
+	}
+
 	// clean up existing .parquet files
 	p.cleanup()
 
-	return p
+	return p, nil
+}
+
+func NewCloudParquetFile(cloudWriter cloudwriter.CloudWriter) *CloudParquetFile {
+	return &CloudParquetFile{
+		cloudWriter: cloudWriter,
+		offset:      0,
+	}
+}
+
+func (c *CloudParquetFile) Seek(offset int64, whence int) (int64, error) {
+	switch whence {
+	case io.SeekStart:
+		c.offset = offset
+	case io.SeekCurrent:
+		c.offset += offset
+	case io.SeekEnd:
+		// this might not be applicable for cloud storage
+		return 0, fmt.Errorf("seek from end not supported for cloud storage")
+	}
+	return c.offset, nil
+}
+
+func (c *CloudParquetFile) Read(p []byte) (n int, err error) {
+	// this might not be applicable for cloud storage
+	return 0, fmt.Errorf("read not supported for cloud storage")
+}
+
+func (c *CloudParquetFile) Write(p []byte) (n int, err error) {
+	return c.cloudWriter.Write(p)
+}
+
+func (c *CloudParquetFile) Close() error {
+	return c.cloudWriter.Close()
 }
 
 func (c *CSVOutput) WriteMessage(topic string, msg []byte) error {
@@ -308,10 +385,21 @@ func (p *ParquetOutput) cleanup() {
 }
 
 func (p *ParquetOutput) createNewWriter(writerKey, fullPath, topic string) (*writer.ParquetWriter, error) {
-	filePath := filepath.Join(fullPath, "data.parquet")
-	fw, err := local.NewLocalFileWriter(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create local file writer: %w", err)
+	var fw source.ParquetFile
+	var err error
+	if p.cloudWriterFactory != nil {
+		objectPath := filepath.Join(p.folder, topic, fullPath, "data.parquet")
+		cloudWriter, err := p.cloudWriterFactory.NewWriter(p.cloudBucketName, objectPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create cloud file writer: %w", err)
+		}
+		fw = NewCloudParquetFile(cloudWriter)
+	} else {
+		filePath := filepath.Join(fullPath, "data.parquet")
+		fw, err = local.NewLocalFileWriter(filePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create local file writer: %w", err)
+		}
 	}
 
 	sc, err := GetSchema(topic)
@@ -459,7 +547,11 @@ func (s *Simulator) determineOutputDestination() OutputDestination {
 	} else if s.Config.OutputPath != "" {
 		switch s.Config.OutputFormat {
 		case "parquet":
-			return NewParquetOutput(s.Config.OutputPath, s.Config.OutputFolder)
+			output, err := NewParquetOutput(s.Config)
+			if err != nil {
+				log.Fatalf("Failed to create Parquet output: %s", err)
+			}
+			return output
 		case "json":
 			return NewJSONOutput(s.Config.OutputPath, s.Config.OutputFolder)
 		case "csv":

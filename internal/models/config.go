@@ -24,26 +24,35 @@ type MenuDish struct {
 	Name string `mapstructure:"name"`
 }
 
+type CloudStorageConfig struct {
+	Provider      string `mapstructure:"provider"`
+	BucketName    string `mapstructure:"bucket_name"`
+	ContainerName string `mapstructure:"container_name"`
+	Region        string `mapstructure:"region"`
+}
+
 type Config struct {
-	Seed               int             `mapstructure:"seed"`
-	StartDate          time.Time       `mapstructure:"start_date"`
-	EndDate            time.Time       `mapstructure:"end_date"`
-	InitialUsers       int             `mapstructure:"initial_users"`
-	InitialRestaurants int             `mapstructure:"initial_restaurants"`
-	InitialPartners    int             `mapstructure:"initial_partners"`
-	UserGrowthRate     float64         `mapstructure:"user_growth_rate"`
-	PartnerGrowthRate  float64         `mapstructure:"partner_growth_rate"`
-	OrderFrequency     float64         `mapstructure:"order_frequency"`
-	PeakHourFactor     float64         `mapstructure:"peak_hour_factor"`
-	WeekendFactor      float64         `mapstructure:"weekend_factor"`
-	TrafficVariability float64         `mapstructure:"traffic_variability"`
-	KafkaEnabled       bool            `mapstructure:"kafka_enabled"`
-	KafkaBrokerList    string          `mapstructure:"kafka_broker_list"`
-	KafkaConfig        kafka.ConfigMap `mapstructure:"kafka_config"`
-	OutputFormat       string          `mapstructure:"output_format"`
-	OutputPath         string          `mapstructure:"output_path"`
-	OutputFolder       string          `mapstructure:"output_folder"`
-	Continuous         bool            `mapstructure:"continuous"`
+	Seed               int                `mapstructure:"seed"`
+	StartDate          time.Time          `mapstructure:"start_date"`
+	EndDate            time.Time          `mapstructure:"end_date"`
+	InitialUsers       int                `mapstructure:"initial_users"`
+	InitialRestaurants int                `mapstructure:"initial_restaurants"`
+	InitialPartners    int                `mapstructure:"initial_partners"`
+	UserGrowthRate     float64            `mapstructure:"user_growth_rate"`
+	PartnerGrowthRate  float64            `mapstructure:"partner_growth_rate"`
+	OrderFrequency     float64            `mapstructure:"order_frequency"`
+	PeakHourFactor     float64            `mapstructure:"peak_hour_factor"`
+	WeekendFactor      float64            `mapstructure:"weekend_factor"`
+	TrafficVariability float64            `mapstructure:"traffic_variability"`
+	KafkaEnabled       bool               `mapstructure:"kafka_enabled"`
+	KafkaBrokerList    string             `mapstructure:"kafka_broker_list"`
+	KafkaConfig        kafka.ConfigMap    `mapstructure:"kafka_config"`
+	OutputFormat       string             `mapstructure:"output_format"`
+	OutputPath         string             `mapstructure:"output_path"`
+	OutputFolder       string             `mapstructure:"output_folder"`
+	Continuous         bool               `mapstructure:"continuous"`
+	OutputDestination  string             `mapstructure:"output_destination"`
+	CloudStorage       CloudStorageConfig `mapstructure:"cloud_storage"`
 	// Additional fields
 	CityName              string        `mapstructure:"city_name"`
 	DefaultCurrency       int           `mapstructure:"default_currency"`
@@ -120,6 +129,13 @@ func LoadConfig(cfgFile string) (*Config, error) {
 		return nil, fmt.Errorf("error reading Kafka config: %w", err)
 	}
 	config.KafkaConfig = kafkaConfig
+
+	// validate cloud storage configuration
+	if config.OutputDestination != "local" {
+		if err := validateCloudStorageConfig(&config); err != nil {
+			return nil, err
+		}
+	}
 
 	return &config, nil
 }
@@ -201,4 +217,27 @@ func readKafkaConfig(filename string) (kafka.ConfigMap, error) {
 	}
 
 	return config, scanner.Err()
+}
+
+func validateCloudStorageConfig(config *Config) error {
+	switch config.CloudStorage.Provider {
+	case "gcs":
+		if config.CloudStorage.BucketName == "" {
+			return fmt.Errorf("bucket_name is required for GCS")
+		}
+	case "s3":
+		if config.CloudStorage.BucketName == "" {
+			return fmt.Errorf("bucket_name is required for S3")
+		}
+		if config.CloudStorage.Region == "" {
+			return fmt.Errorf("region is required for S3")
+		}
+	case "azure":
+		if config.CloudStorage.ContainerName == "" {
+			return fmt.Errorf("container_name is required for Azure Blob Storage")
+		}
+	default:
+		return fmt.Errorf("unsupported cloud storage provider: %s", config.CloudStorage.Provider)
+	}
+	return nil
 }
