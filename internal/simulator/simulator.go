@@ -99,6 +99,42 @@ func (s *Simulator) initializeData() {
 	}
 }
 
+func (s *Simulator) growUsers() {
+	// check if user growth rate is specified
+	if s.Config.UserGrowthRate == 0 {
+		return // No growth if rate is not specified
+	}
+
+	// calculate daily growth rate
+	dailyGrowthRate := math.Pow(1+s.Config.UserGrowthRate, 1.0/365.0) - 1
+
+	// calculate the number of days since the start of the simulation
+	daysSinceStart := s.CurrentTime.Sub(s.Config.StartDate).Hours() / 24
+
+	// calculate the expected number of users at this point in the simulation
+	expectedUsers := float64(s.Config.InitialUsers) * math.Pow(1+dailyGrowthRate, daysSinceStart)
+
+	// calculate how many new users to add
+	newUsersToAdd := int(expectedUsers) - len(s.Users)
+
+	if newUsersToAdd > 0 {
+		userFactory := &factories.UserFactory{}
+		for i := 0; i < newUsersToAdd; i++ {
+			newUser := userFactory.CreateUser(s.Config)
+			s.Users = append(s.Users, newUser)
+
+			// schedule the first order for this new user
+			nextOrderTime := s.generateNextOrderTime(newUser)
+			s.EventQueue.Enqueue(&models.Event{
+				Time: nextOrderTime,
+				Type: models.EventPlaceOrder,
+				Data: newUser,
+			})
+		}
+		log.Printf("Added %d new users. Total users: %d", newUsersToAdd, len(s.Users))
+	}
+}
+
 func (s *Simulator) processEvent(event *models.Event) {
 	switch event.Type {
 	case models.EventPlaceOrder:
@@ -136,10 +172,13 @@ func (s *Simulator) simulateTimeStep() {
 	s.updateDeliveryPartnerLocations()
 	s.updateUserBehaviour()
 	s.updateRestaurantStatus()
+	if s.Config.UserGrowthRate > 0 {
+		s.growUsers()
+	}
 }
 
 func (s *Simulator) showProgress(eventsCount int) {
-	if eventsCount%100 == 0 {
+	if eventsCount%1000 == 0 {
 		log.Printf("Current time: %s, Events processed: %d", s.CurrentTime.Format(time.RFC3339), eventsCount)
 	}
 }
@@ -940,7 +979,9 @@ func (s *Simulator) Run() {
 				if err := output.WriteMessage(eventMsg.Topic, eventMsg.Message); err != nil {
 					log.Printf("Failed to write message: %v", err)
 				}
+				eventsCountMutex.Lock()
 				eventsCount++
+				eventsCountMutex.Unlock()
 			}
 		}()
 	}

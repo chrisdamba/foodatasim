@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/xitongsys/parquet-go-source/local"
+	"github.com/xitongsys/parquet-go/source"
 	"github.com/xitongsys/parquet-go/writer"
 	"log"
 	"os"
@@ -32,6 +33,7 @@ type ParquetOutput struct {
 	mu            sync.Mutex
 	writers       map[string]*writer.ParquetWriter
 	writerMutexes map[string]*sync.Mutex
+	files         map[string]source.ParquetFile
 }
 
 type ConsoleOutput struct{}
@@ -69,6 +71,7 @@ func NewParquetOutput(basePath, folder string) *ParquetOutput {
 		folder:        folder,
 		writers:       make(map[string]*writer.ParquetWriter),
 		writerMutexes: make(map[string]*sync.Mutex),
+		files:         make(map[string]source.ParquetFile),
 	}
 
 	// clean up existing .parquet files
@@ -322,6 +325,10 @@ func (p *ParquetOutput) createNewWriter(writerKey, fullPath, topic string) (*wri
 	}
 	pw.SchemaHandler = sc
 
+	p.writers[writerKey] = pw
+	p.writerMutexes[writerKey] = &sync.Mutex{}
+	p.files[writerKey] = fw
+
 	return pw, nil
 }
 
@@ -383,6 +390,12 @@ func (p *ParquetOutput) Close() error {
 			if err := pw.WriteStop(); err != nil {
 				lastErr = err
 				log.Printf("Error closing writer for key %s: %v", key, err)
+			}
+			if f, ok := p.files[key]; ok {
+				if err := f.Close(); err != nil {
+					lastErr = err
+					log.Printf("Error closing file for key %s: %v", key, err)
+				}
 			}
 			mutex.Unlock()
 		}
