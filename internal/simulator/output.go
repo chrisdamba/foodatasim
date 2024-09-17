@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"github.com/IBM/sarama"
 	"github.com/chrisdamba/foodatasim/internal/cloudwriter"
 	"github.com/chrisdamba/foodatasim/internal/models"
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -43,7 +45,11 @@ type ParquetOutput struct {
 
 type ConsoleOutput struct{}
 
-type KafkaOutput struct {
+type LocalKafkaOutput struct {
+	producer sarama.SyncProducer
+}
+
+type CloudKafkaOutput struct {
 	producer *kafka.Producer
 }
 
@@ -491,7 +497,18 @@ func (p *ParquetOutput) Close() error {
 	return lastErr
 }
 
-func (k *KafkaOutput) WriteMessage(topic string, msg []byte) error {
+func (k *LocalKafkaOutput) WriteMessage(topic string, msg []byte) error {
+	if k.producer == nil {
+		return fmt.Errorf("local Kafka producer is closed")
+	}
+	_, _, err := k.producer.SendMessage(&sarama.ProducerMessage{
+		Topic: topic,
+		Value: sarama.ByteEncoder(msg),
+	})
+	return err
+}
+
+func (k *CloudKafkaOutput) WriteMessage(topic string, msg []byte) error {
 	if k.producer == nil {
 		return fmt.Errorf("kafka producer is closed")
 	}
@@ -532,18 +549,36 @@ func (c *ConsoleOutput) WriteMessage(topic string, msg []byte) error {
 }
 
 func (s *Simulator) CloseKafkaProducer(output OutputDestination) {
-	if kafkaOutput, ok := output.(*KafkaOutput); ok {
-		kafkaOutput.producer.Close()
+	switch o := output.(type) {
+	case *LocalKafkaOutput:
+		if o.producer != nil {
+			o.producer.Close()
+		}
+	case *CloudKafkaOutput:
+		if o.producer != nil {
+			o.producer.Close()
+		}
 	}
 }
 
 func (s *Simulator) determineOutputDestination() OutputDestination {
 	if s.Config.KafkaEnabled {
-		producer, err := createKafkaProducer(s.Config.KafkaConfig)
-		if err != nil {
-			log.Fatalf("Failed to create Kafka producer: %s", err)
+		if s.Config.KafkaUseLocal {
+			// use local Kafka with Sarama
+			brokerList := strings.Split(s.Config.KafkaBrokerList, ",")
+			producer, err := createSaramaProducer(brokerList)
+			if err != nil {
+				log.Fatalf("Failed to create local Kafka producer: %s", err)
+			}
+			return &LocalKafkaOutput{producer: producer}
+		} else {
+			// use cloud Kafka with confluent-kafka-go
+			producer, err := createCloudKafkaProducer(s.Config.KafkaConfig)
+			if err != nil {
+				log.Fatalf("Failed to create cloud Kafka producer: %s", err)
+			}
+			return &CloudKafkaOutput{producer: producer}
 		}
-		return &KafkaOutput{producer: producer}
 	} else if s.Config.OutputPath != "" {
 		switch s.Config.OutputFormat {
 		case "parquet":
@@ -563,8 +598,25 @@ func (s *Simulator) determineOutputDestination() OutputDestination {
 	return &ConsoleOutput{}
 }
 
-func createKafkaProducer(config kafka.ConfigMap) (*kafka.Producer, error) {
+func createCloudKafkaProducer(config kafka.ConfigMap) (*kafka.Producer, error) {
 	producer, err := kafka.NewProducer(&config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Kafka producer: %w", err)
+	}
+	return producer, nil
+}
+
+func createSaramaProducer(brokerList []string) (sarama.SyncProducer, error) {
+	config := sarama.NewConfig()
+	config.Producer.RequiredAcks = sarama.WaitForAll
+	config.Producer.Retry.Max = 5
+	config.Producer.Retry.Backoff = 100 * time.Millisecond
+	config.Producer.Return.Successes = true
+	config.Net.DialTimeout = 30 * time.Second
+	config.Net.ReadTimeout = 30 * time.Second
+	config.Net.WriteTimeout = 30 * time.Second
+
+	producer, err := sarama.NewSyncProducer(brokerList, config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Kafka producer: %w", err)
 	}

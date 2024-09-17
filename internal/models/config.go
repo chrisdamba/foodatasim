@@ -45,6 +45,7 @@ type Config struct {
 	WeekendFactor      float64            `mapstructure:"weekend_factor"`
 	TrafficVariability float64            `mapstructure:"traffic_variability"`
 	KafkaEnabled       bool               `mapstructure:"kafka_enabled"`
+	KafkaUseLocal      bool               `mapstructure:"kafka_use_local"`
 	KafkaBrokerList    string             `mapstructure:"kafka_broker_list"`
 	KafkaConfig        kafka.ConfigMap    `mapstructure:"kafka_config"`
 	OutputFormat       string             `mapstructure:"output_format"`
