@@ -7,7 +7,6 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/chrisdamba/foodatasim/internal/cloudwriter"
 	"github.com/chrisdamba/foodatasim/internal/models"
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/xitongsys/parquet-go-source/local"
 	"github.com/xitongsys/parquet-go/source"
 	"github.com/xitongsys/parquet-go/writer"
@@ -45,12 +44,8 @@ type ParquetOutput struct {
 
 type ConsoleOutput struct{}
 
-type LocalKafkaOutput struct {
+type KafkaOutput struct {
 	producer sarama.SyncProducer
-}
-
-type CloudKafkaOutput struct {
-	producer *kafka.Producer
 }
 
 type JSONOutput struct {
@@ -497,7 +492,7 @@ func (p *ParquetOutput) Close() error {
 	return lastErr
 }
 
-func (k *LocalKafkaOutput) WriteMessage(topic string, msg []byte) error {
+func (k *KafkaOutput) WriteMessage(topic string, msg []byte) error {
 	if k.producer == nil {
 		return fmt.Errorf("local Kafka producer is closed")
 	}
@@ -506,30 +501,6 @@ func (k *LocalKafkaOutput) WriteMessage(topic string, msg []byte) error {
 		Value: sarama.ByteEncoder(msg),
 	})
 	return err
-}
-
-func (k *CloudKafkaOutput) WriteMessage(topic string, msg []byte) error {
-	if k.producer == nil {
-		return fmt.Errorf("kafka producer is closed")
-	}
-	deliveryChan := make(chan kafka.Event)
-	err := k.producer.Produce(&kafka.Message{
-		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
-		Value:          msg,
-	}, deliveryChan)
-
-	if err != nil {
-		return err
-	}
-
-	e := <-deliveryChan
-	m := e.(*kafka.Message)
-
-	if m.TopicPartition.Error != nil {
-		return fmt.Errorf("delivery failed: %v", m.TopicPartition.Error)
-	}
-
-	return nil
 }
 
 func (c *ConsoleOutput) WriteMessage(topic string, msg []byte) error {
@@ -550,11 +521,7 @@ func (c *ConsoleOutput) WriteMessage(topic string, msg []byte) error {
 
 func (s *Simulator) CloseKafkaProducer(output OutputDestination) {
 	switch o := output.(type) {
-	case *LocalKafkaOutput:
-		if o.producer != nil {
-			o.producer.Close()
-		}
-	case *CloudKafkaOutput:
+	case *KafkaOutput:
 		if o.producer != nil {
 			o.producer.Close()
 		}
@@ -563,22 +530,13 @@ func (s *Simulator) CloseKafkaProducer(output OutputDestination) {
 
 func (s *Simulator) determineOutputDestination() OutputDestination {
 	if s.Config.KafkaEnabled {
-		if s.Config.KafkaUseLocal {
-			// use local Kafka with Sarama
-			brokerList := strings.Split(s.Config.KafkaBrokerList, ",")
-			producer, err := createSaramaProducer(brokerList)
-			if err != nil {
-				log.Fatalf("Failed to create local Kafka producer: %s", err)
-			}
-			return &LocalKafkaOutput{producer: producer}
-		} else {
-			// use cloud Kafka with confluent-kafka-go
-			producer, err := createCloudKafkaProducer(s.Config.KafkaConfig)
-			if err != nil {
-				log.Fatalf("Failed to create cloud Kafka producer: %s", err)
-			}
-			return &CloudKafkaOutput{producer: producer}
+		// use local Kafka with Sarama
+		brokerList := strings.Split(s.Config.KafkaBrokerList, ",")
+		producer, err := createSaramaProducer(brokerList)
+		if err != nil {
+			log.Fatalf("Failed to create local Kafka producer: %s", err)
 		}
+		return &KafkaOutput{producer: producer}
 	} else if s.Config.OutputPath != "" {
 		switch s.Config.OutputFormat {
 		case "parquet":
@@ -596,14 +554,6 @@ func (s *Simulator) determineOutputDestination() OutputDestination {
 		}
 	}
 	return &ConsoleOutput{}
-}
-
-func createCloudKafkaProducer(config kafka.ConfigMap) (*kafka.Producer, error) {
-	producer, err := kafka.NewProducer(&config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Kafka producer: %w", err)
-	}
-	return producer, nil
 }
 
 func createSaramaProducer(brokerList []string) (sarama.SyncProducer, error) {

@@ -1,14 +1,11 @@
 package models
 
 import (
-	"bufio"
 	"encoding/csv"
 	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"io"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/mitchellh/mapstructure"
@@ -47,7 +44,6 @@ type Config struct {
 	KafkaEnabled       bool               `mapstructure:"kafka_enabled"`
 	KafkaUseLocal      bool               `mapstructure:"kafka_use_local"`
 	KafkaBrokerList    string             `mapstructure:"kafka_broker_list"`
-	KafkaConfig        kafka.ConfigMap    `mapstructure:"kafka_config"`
 	OutputFormat       string             `mapstructure:"output_format"`
 	OutputPath         string             `mapstructure:"output_path"`
 	OutputFolder       string             `mapstructure:"output_folder"`
@@ -124,13 +120,6 @@ func LoadConfig(cfgFile string) (*Config, error) {
 		return nil, fmt.Errorf("unable to decode into struct, %w", err)
 	}
 
-	// load Kafka config from client.properties
-	kafkaConfig, err := readKafkaConfig("client.properties")
-	if err != nil {
-		return nil, fmt.Errorf("error reading Kafka config: %w", err)
-	}
-	config.KafkaConfig = kafkaConfig
-
 	// validate cloud storage configuration
 	if config.OutputDestination != "local" {
 		if err := validateCloudStorageConfig(&config); err != nil {
@@ -196,28 +185,6 @@ func (cfg *Config) LoadMenuDishData(filePath string) error {
 	}
 
 	return nil
-}
-
-func readKafkaConfig(filename string) (kafka.ConfigMap, error) {
-	config := make(kafka.ConfigMap)
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "#") && len(line) != 0 {
-			kv := strings.SplitN(line, "=", 2)
-			if len(kv) == 2 {
-				config[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
-			}
-		}
-	}
-
-	return config, scanner.Err()
 }
 
 func validateCloudStorageConfig(config *Config) error {
