@@ -151,8 +151,10 @@ func (cfg *Config) LoadReviewData(filePath string) error {
 	defer file.Close()
 
 	reader := csv.NewReader(file)
-	reader.Comma = '\t'
-	reader.Read()
+	reader.Comma = '\t'         // use tab as the delimiter
+	reader.LazyQuotes = true    // allow lazy quoting
+	reader.FieldsPerRecord = -1 // allow variable number of fields
+	reader.Read()               // skip the header line
 
 	for {
 		fields, err := reader.Read()
@@ -160,9 +162,20 @@ func (cfg *Config) LoadReviewData(filePath string) error {
 			break
 		}
 		if err != nil {
-			return err
+			fmt.Printf("Warning: skipping line due to error: %v\n", err)
+			continue
 		}
-		liked, _ := strconv.ParseBool(fields[1])
+		if len(fields) < 2 {
+			fmt.Printf("Warning: skipping incomplete line: %v\n", fields)
+			continue
+		}
+		// handle parsing "liked" field as integer (0 or 1)
+		likedInt, err := strconv.Atoi(fields[1])
+		if err != nil {
+			fmt.Printf("Warning: invalid liked value on line: %v\n", fields)
+			continue
+		}
+		liked := likedInt != 0
 		review := ReviewData{
 			Comment: fields[0],
 			Liked:   liked,
