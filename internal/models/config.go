@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mitchellh/mapstructure"
@@ -99,14 +100,26 @@ func LoadConfig(cfgFile string) (*Config, error) {
 		viper.SetConfigName("config")
 		viper.SetConfigType("json")
 	}
+	// set the environment variable prefix to avoid conflicts
+	viper.SetEnvPrefix("FOODATASIM")
 
-	viper.AutomaticEnv() // Read in environment variables that match
+	viper.AutomaticEnv() // read in environment variables that match
+
+	// Replace dots with underscores in config keys when searching for environment variables
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+
+	// Bind environment variables to config keys
+	bindEnvVariables()
 
 	// set default for start time as the current time if not provided
 	viper.SetDefault("start-time", time.Now().Format(time.RFC3339))
 
+	// read in the config file (optional)
 	if err := viper.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("error reading config file: %w", err)
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			return nil, fmt.Errorf("error reading config file: %w", err)
+		}
+		// it's okay if the config file is not found; we can rely on env vars and defaults
 	}
 
 	var config Config
@@ -208,4 +221,39 @@ func validateCloudStorageConfig(config *Config) error {
 		return fmt.Errorf("unsupported cloud storage provider: %s", config.CloudStorage.Provider)
 	}
 	return nil
+}
+
+func bindEnvVariables() {
+	// list all the keys to bind to environment variables
+	keys := []string{
+		"seed",
+		"start_date",
+		"end_date",
+		"initial_users",
+		"initial_restaurants",
+		"initial_partners",
+		"user_growth_rate",
+		"partner_growth_rate",
+		"order_frequency",
+		"peak_hour_factor",
+		"weekend_factor",
+		"traffic_variability",
+		"kafka_enabled",
+		"kafka_use_local",
+		"kafka_broker_list",
+		"output_format",
+		"output_path",
+		"output_folder",
+		"continuous",
+		"output_destination",
+		"cloud_storage.provider",
+		"cloud_storage.bucket_name",
+		"cloud_storage.container_name",
+		"cloud_storage.region",
+		// add other keys as needed
+	}
+
+	for _, key := range keys {
+		viper.BindEnv(key)
+	}
 }

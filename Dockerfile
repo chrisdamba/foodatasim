@@ -27,5 +27,8 @@ COPY --from=builder /app/data /root/data
 COPY --from=builder /app/examples /root/examples
 COPY --from=builder /app/client.properties /root/
 
+# Set the entrypoint to the application binary
+ENTRYPOINT ["./foodatasim"]
+
 # Command to run
 CMD ["./foodatasim", "--config", "./examples/config.json"]

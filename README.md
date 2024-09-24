@@ -81,53 +81,213 @@ Example config file:
   "seed": 42,
   "start_date": "2024-06-01T00:00:00Z",
   "end_date": "2024-07-01T00:00:00Z",
-  "initial_users": 1000,
-  "initial_restaurants": 100,
-  "initial_partners": 50,
+  "initial_users": 10000,
+  "initial_restaurants": 1000,
+  "initial_partners": 300,
   "user_growth_rate": 0.01,
   "partner_growth_rate": 0.02,
   "order_frequency": 0.1,
   "peak_hour_factor": 1.5,
   "weekend_factor": 1.2,
   "traffic_variability": 0.2,
-  "kafka_enabled": false,
+  "kafka_enabled": true,
+  "kafka_use_local": true,
   "kafka_broker_list": "localhost:9092",
-  "output_file_path": "",
-  "continuous": false
+  "output_destination": "s3",
+  "output_format": "parquet",
+  "output_path": "output",
+  "output_folder": "events",
+  "continuous": true,
+  "cloud_storage": {
+    "provider": "s3",
+    "bucket_name": "foodsimdata",
+    "region": "eu-west-2"
+  },
+  "city_name": "Stoke-on-Trent",
+  "default_currency": 1,
+  "min_prep_time": 10,
+  "max_prep_time": 60,
+  "min_rating": 1.0,
+  "max_rating": 5.0,
+  "max_initial_ratings": 100,
+  "min_efficiency": 0.5,
+  "max_efficiency": 1.5,
+  "min_capacity": 5,
+  "max_capacity": 50,
+  "tax_rate": 0.08,
+  "service_fee_percentage": 0.15,
+  "discount_percentage": 0.1,
+  "min_order_for_discount": 20.0,
+  "max_discount_amount": 10.0,
+  "base_delivery_fee": 2.99,
+  "free_delivery_threshold": 30.0,
+  "small_order_threshold": 10.0,
+  "small_order_fee": 2.0,
+  "restaurant_rating_alpha": 0.1,
+  "partner_rating_alpha": 0.1,
+  "near_location_threshold": 50.0,
+  "city_latitude": 53.002666,
+  "city_longitude": -2.179404,
+  "urban_radius": 10.0,
+  "hotspot_radius": 2.0,
+  "partner_move_speed": 40.0,
+  "location_precision": 0.0001,
+  "user_behaviour_window": 10,
+  "restaurant_load_factor": 0.2,
+  "efficiency_adjust_rate": 0.1
 }
 ```
 
-Usage
-=====
+## Usage
+
+### Building the Executable
 
 To build the executable, run:
 
-    $ go build -o bin/foodatasim
+```bash
+go build -o bin/foodatasim
+```
+
+### Running the Simulator
 
 The program accepts several command-line options:
 
-    $ bin/foodatasim --help
-        --config string      config file (default is $HOME/.foodatasim.yaml)
-        --seed int           Random seed for simulation (default 42)
-        --start-date string  Start date for simulation (default "current date")
-        --end-date string    End date for simulation (default "current date + 1 month")
-        --initial-users int  Initial number of users (default 1000)
-        --initial-restaurants int  Initial number of restaurants (default 100)
-        --initial-partners int     Initial number of delivery partners (default 50)
-        --user-growth-rate float   Annual user growth rate (default 0.01)
-        --partner-growth-rate float  Annual partner growth rate (default 0.02)
-        --order-frequency float      Average order frequency per user per day (default 0.1)
-        --peak-hour-factor float     Factor for increased order frequency during peak hours (default 1.5)
-        --weekend-factor float       Factor for increased order frequency during weekends (default 1.2)
-        --traffic-variability float  Variability in traffic conditions (default 0.2)
-        --kafka-enabled              Enable Kafka output
-        --kafka-broker-list string   Kafka broker list (default "localhost:9092")
-        --output-file string         Output file path (if not using Kafka)
-        --continuous                 Run simulation in continuous mode
+```bash
+./bin/foodatasim --help
+```
+
+Available options:
+
+- `--config string`: Config file (default is `./examples/config.json`).
+- `--seed int`: Random seed for simulation (default 42).
+- `--start-date string`: Start date for simulation (default "current date").
+- `--end-date string`: End date for simulation (default "current date + 1 month").
+- `--initial-users int`: Initial number of users (default 1000).
+- `--initial-restaurants int`: Initial number of restaurants (default 100).
+- `--initial-partners int`: Initial number of delivery partners (default 50).
+- `--user-growth-rate float`: Annual user growth rate (default 0.01).
+- `--partner-growth-rate float`: Annual partner growth rate (default 0.02).
+- `--order-frequency float`: Average order frequency per user per day (default 0.1).
+- `--peak-hour-factor float`: Factor for increased order frequency during peak hours (default 1.5).
+- `--weekend-factor float`: Factor for increased order frequency during weekends (default 1.2).
+- `--traffic-variability float`: Variability in traffic conditions (default 0.2).
+- `--kafka-enabled`: Enable Kafka output.
+- `--kafka-broker-list string`: Kafka broker list (default "localhost:9092").
+- `--output-file string`: Output file path (if not using Kafka).
+- `--continuous`: Run simulation in continuous mode.
 
 Example for generating about 1 million events (1,000 users for a month, growing at 1% annually):
 
-    $ bin/foodatasim --config config.json --start-date "2023-06-01T00:00:00Z" --end-date "2023-07-01T00:00:00Z" --initial-users 1000 --user-growth-rate 0.01 --output-file data/synthetic.json
+```bash
+./bin/foodatasim --config examples/config.json --start-date "2024-06-01T00:00:00Z" --end-date "2024-07-01T00:00:00Z" --initial-users 1000 --user-growth-rate 0.01 --output-file data/synthetic.json
+```
+
+## Building the Docker Image
+
+To build a Docker image for FoodataSim, you can use Docker's Buildx tool, which allows you to build images for multiple platforms (e.g., `amd64` and `arm64`). This is especially useful if you plan to run the image on different architectures.
+
+### Prerequisites
+
+- **Docker Buildx**: Ensure you have Docker Buildx installed and enabled. It comes bundled with Docker Desktop and can be enabled in the Docker CLI.
+- **Docker Hub Account**: You'll need an account on Docker Hub (or another container registry) to push the image.
+
+### Building and Pushing the Image
+
+Use the following command to build and push the Docker image:
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t your-dockerhub-username/foodatasim:latest \
+  --push .
+```
+
+**Explanation:**
+
+- `docker buildx build`: Uses Docker Buildx for extended build capabilities.
+- `--platform linux/amd64,linux/arm64`: Specifies the target platforms to build for.
+- `-t your-dockerhub-username/foodatasim:latest`: Tags the image with your Docker Hub username and the image name `foodatasim:latest`.
+- `--push`: Pushes the built image to the specified registry (e.g., Docker Hub).
+- `.`: Specifies the build context (the current directory).
+
+### Steps to Build and Push
+
+1. **Enable Buildx (if not already enabled):**
+
+   If you're using Docker Desktop, Buildx is included by default. To enable Buildx, you can run:
+
+   ```bash
+   docker buildx create --name mybuilder --use
+   docker buildx inspect --bootstrap
+   ```
+
+2. **Log in to Docker Hub:**
+
+   ```bash
+   docker login
+   ```
+
+   Enter your Docker Hub username and password when prompted.
+
+3. **Build and Push the Image:**
+
+   Run the build command, replacing `your-dockerhub-username` with your actual Docker Hub username:
+
+   ```bash
+   docker buildx build --platform linux/amd64,linux/arm64 \
+     -t your-dockerhub-username/foodatasim:latest \
+     --push .
+   ```
+
+4. **Verify the Image on Docker Hub:**
+
+   After the build and push complete, you can verify the image is available on Docker Hub.
+
+### Building for a Single Platform (Optional)
+
+If you only need to build for your local machine's architecture, you can simplify the command:
+
+```bash
+docker build -t your-dockerhub-username/foodatasim:latest .
+```
+
+## Running the Docker Container
+
+After building and pushing the Docker image, you can run FoodataSim using Docker.
+
+### Basic Run Command
+
+```bash
+docker run -d \
+  --name foodatasim \
+  your-dockerhub-username/foodatasim:latest
+```
+
+### Running with Custom Configuration
+
+You can pass environment variables or command-line arguments to customize the simulation.
+
+#### Using Environment Variables
+
+```bash
+docker run -d \
+  --name foodatasim \
+  -e FOODATASIM_KAFKA_ENABLED=true \
+  -e FOODATASIM_KAFKA_BROKER_LIST="your_kafka_broker:9092" \
+  your-dockerhub-username/foodatasim:latest
+```
+
+#### Using Command-Line Arguments
+
+```bash
+docker run -d \
+  --name foodatasim \
+  your-dockerhub-username/foodatasim:latest \
+  --kafka-enabled \
+  --kafka-broker-list "your_kafka_broker:9092" \
+  --config "./examples/config.json"
+```
+
+**Note:** When passing command-line arguments, they will override the default `CMD` specified in the Dockerfile.
 
 ## Generated Data
 
