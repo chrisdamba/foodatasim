@@ -182,6 +182,7 @@ Example for generating about 1 million events (1,000 users for a month, growing 
 ./bin/foodatasim --config examples/config.json --start-date "2024-06-01T00:00:00Z" --end-date "2024-07-01T00:00:00Z" --initial-users 1000 --user-growth-rate 0.01 --output-file data/synthetic.json
 ```
 
+
 ## Building the Docker Image
 
 To build a Docker image for FoodataSim, you can use Docker's Buildx tool, which allows you to build images for multiple platforms (e.g., `amd64` and `arm64`). This is especially useful if you plan to run the image on different architectures.
@@ -252,42 +253,183 @@ docker build -t your-dockerhub-username/foodatasim:latest .
 
 ## Running the Docker Container
 
-After building and pushing the Docker image, you can run FoodataSim using Docker.
+After building and pushing the Docker image, you can run FoodataSim using Docker. Below are detailed instructions for different scenarios, including enabling Kafka with local setup and using Confluent Cloud.
 
-### Basic Run Command
+### Running with Kafka Enabled and `use_local=true` (Local Kafka)
+
+This configuration streams simulated data to a locally running Kafka broker.
+
+1. **Ensure Kafka is Running Locally:**
+
+   Make sure you have a Kafka broker running on your local machine (e.g., on `localhost:9092`).
+
+2. **Run the Docker Container:**
+
+   ```bash
+   docker run -d \
+     --name foodatasim \
+     -e FOODATASIM_KAFKA_ENABLED=true \
+     -e FOODATASIM_KAFKA_USE_LOCAL=true \
+     -e FOODATASIM_KAFKA_BROKER_LIST="localhost:9092" \
+     your-dockerhub-username/foodatasim:latest
+   ```
+
+   **Explanation of Environment Variables:**
+
+   - `FOODATASIM_KAFKA_ENABLED=true`: Enables Kafka output.
+   - `FOODATASIM_KAFKA_USE_LOCAL=true`: Configures the simulator to use the local Kafka broker.
+   - `FOODATASIM_KAFKA_BROKER_LIST="localhost:9092"`: Specifies the Kafka broker address.
+
+3. **Verify the Container is Running:**
+
+   ```bash
+   docker ps
+   ```
+
+   You should see an entry similar to:
+
+   ```
+   CONTAINER ID   IMAGE                           COMMAND         CREATED          STATUS          PORTS                    NAMES
+   abcdef123456   your-dockerhub-username/foodatasim:latest   "./foodatasim"   10 seconds ago   Up 8 seconds    0.0.0.0:9092->9092/tcp   foodatasim
+   ```
+
+4. **Check Logs for Confirmation:**
+
+   ```bash
+   docker logs -f foodatasim
+   ```
+
+   Look for logs indicating that Kafka output is enabled and messages are being produced.
+
+### Running with Kafka Enabled and `use_local=false` (Confluent Cloud)
+
+This configuration streams simulated data to Confluent Cloud Kafka. You'll need to provide Confluent Cloud credentials via environment variables.
+
+1. **Set Up Confluent Cloud Kafka:**
+
+   - **Create a Confluent Cloud Account:** If you don't have one, sign up at [Confluent Cloud](https://www.confluent.io/confluent-cloud/).
+   - **Create a Kafka Cluster:** Follow Confluent Cloud's documentation to set up a Kafka cluster.
+   - **Obtain Kafka Credentials:**
+      - **API Key and Secret:** For SASL authentication.
+      - **Bootstrap Servers:** The address of your Kafka brokers.
+      - **Security Protocol and SASL Mechanism:** Typically `SASL_SSL` and `PLAIN`.
+
+2. **Prepare Environment Variables:**
+
+   You'll need to pass the following environment variables to the Docker container:
+
+   - `FOODATASIM_KAFKA_ENABLED=true`
+   - `FOODATASIM_KAFKA_USE_LOCAL=false`
+   - `FOODATASIM_KAFKA_BROKER_LIST=<Bootstrap Servers>` (e.g., `pkc-4wxyz.us-west1.gcp.confluent.cloud:9092`)
+   - `FOODATASIM_KAFKA_SECURITY_PROTOCOL=SASL_SSL`
+   - `FOODATASIM_KAFKA_SASL_MECHANISM=PLAIN`
+   - `FOODATASIM_KAFKA_SASL_USERNAME=<API Key>`
+   - `FOODATASIM_KAFKA_SASL_PASSWORD=<API Secret>`
+
+3. **Run the Docker Container:**
+
+   You can pass these environment variables directly in the `docker run` command or use an `.env` file for better security and manageability.
+
+   **Using Direct Environment Variables:**
+
+   ```bash
+   docker run -d \
+     --name foodatasim \
+     -e FOODATASIM_KAFKA_ENABLED=true \
+     -e FOODATASIM_KAFKA_USE_LOCAL=false \
+     -e FOODATASIM_KAFKA_BROKER_LIST="pkc-4wxyz.us-west1.gcp.confluent.cloud:9092" \
+     -e FOODATASIM_KAFKA_SECURITY_PROTOCOL="SASL_SSL" \
+     -e FOODATASIM_KAFKA_SASL_MECHANISM="PLAIN" \
+     -e FOODATASIM_KAFKA_SASL_USERNAME="YOUR_API_KEY" \
+     -e FOODATASIM_KAFKA_SASL_PASSWORD="YOUR_API_SECRET" \
+     your-dockerhub-username/foodatasim:latest
+   ```
+
+   **Using an `.env` File:**
+
+   1. **Create a `.env` File:**
+
+      ```bash
+      touch .env
+      ```
+
+   2. **Add the Following to `.env`:**
+
+      ```env
+      FOODATASIM_KAFKA_ENABLED=true
+      FOODATASIM_KAFKA_USE_LOCAL=false
+      FOODATASIM_KAFKA_BROKER_LIST=pkc-4wxyz.us-west1.gcp.confluent.cloud:9092
+      FOODATASIM_KAFKA_SECURITY_PROTOCOL=SASL_SSL
+      FOODATASIM_KAFKA_SASL_MECHANISM=PLAIN
+      FOODATASIM_KAFKA_SASL_USERNAME=YOUR_API_KEY
+      FOODATASIM_KAFKA_SASL_PASSWORD=YOUR_API_SECRET
+      ```
+
+   3. **Run the Docker Container with the `.env` File:**
+
+      ```bash
+      docker run -d \
+        --name foodatasim \
+        --env-file .env \
+        your-dockerhub-username/foodatasim:latest
+      ```
+
+      **Security Note:** Ensure that your `.env` file is secured and not committed to version control systems like Git.
+
+4. **Verify the Container is Running:**
+
+   ```bash
+   docker ps
+   ```
+
+   You should see an entry similar to:
+
+   ```
+   CONTAINER ID   IMAGE                           COMMAND         CREATED          STATUS          PORTS                    NAMES
+   abcdef123456   your-dockerhub-username/foodatasim:latest   "./foodatasim"   10 seconds ago   Up 8 seconds    0.0.0.0:9092->9092/tcp   foodatasim
+   ```
+
+5. **Check Logs for Confirmation:**
+
+   ```bash
+   docker logs -f foodatasim
+   ```
+
+   Look for logs indicating that Kafka output is enabled and messages are being produced to Confluent Cloud.
+
+### Running the Docker Container with Custom Configuration
+
+You can also pass additional configuration options or override defaults as needed. Below are some examples:
+
+#### Example 1: Kafka Enabled with Local Kafka
 
 ```bash
 docker run -d \
-  --name foodatasim \
-  your-dockerhub-username/foodatasim:latest
-```
-
-### Running with Custom Configuration
-
-You can pass environment variables or command-line arguments to customize the simulation.
-
-#### Using Environment Variables
-
-```bash
-docker run -d \
-  --name foodatasim \
+  --name foodatasim-local-kafka \
   -e FOODATASIM_KAFKA_ENABLED=true \
-  -e FOODATASIM_KAFKA_BROKER_LIST="your_kafka_broker:9092" \
-  your-dockerhub-username/foodatasim:latest
-```
-
-#### Using Command-Line Arguments
-
-```bash
-docker run -d \
-  --name foodatasim \
+  -e FOODATASIM_KAFKA_USE_LOCAL=true \
+  -e FOODATASIM_KAFKA_BROKER_LIST="localhost:9092" \
   your-dockerhub-username/foodatasim:latest \
-  --kafka-enabled \
-  --kafka-broker-list "your_kafka_broker:9092" \
   --config "./examples/config.json"
 ```
 
-**Note:** When passing command-line arguments, they will override the default `CMD` specified in the Dockerfile.
+#### Example 2: Kafka Enabled with Confluent Cloud
+
+```bash
+docker run -d \
+  --name foodatasim-confluent-cloud \
+  -e FOODATASIM_KAFKA_ENABLED=true \
+  -e FOODATASIM_KAFKA_USE_LOCAL=false \
+  -e FOODATASIM_KAFKA_BROKER_LIST="pkc-4wxyz.us-west1.gcp.confluent.cloud:9092" \
+  -e FOODATASIM_KAFKA_SECURITY_PROTOCOL="SASL_SSL" \
+  -e FOODATASIM_KAFKA_SASL_MECHANISM="PLAIN" \
+  -e FOODATASIM_KAFKA_SASL_USERNAME="YOUR_API_KEY" \
+  -e FOODATASIM_KAFKA_SASL_PASSWORD="YOUR_API_SECRET" \
+  your-dockerhub-username/foodatasim:latest \
+  --config "./examples/config.json"
+```
+
+**Note:** Replace `"YOUR_API_KEY"` and `"YOUR_API_SECRET"` with your actual Confluent Cloud credentials.
 
 ## Generated Data
 
