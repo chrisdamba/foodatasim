@@ -7,6 +7,8 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/chrisdamba/foodatasim/internal/cloudwriter"
 	"github.com/chrisdamba/foodatasim/internal/models"
+	simulator "github.com/chrisdamba/foodatasim/internal/simulator/producers"
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/xitongsys/parquet-go-source/local"
 	"github.com/xitongsys/parquet-go/source"
 	"github.com/xitongsys/parquet-go/writer"
@@ -15,13 +17,13 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 )
 
 type OutputDestination interface {
 	WriteMessage(topic string, msg []byte) error
+	Close() error
 }
 
 type CSVOutput struct {
@@ -43,6 +45,11 @@ type ParquetOutput struct {
 }
 
 type ConsoleOutput struct{}
+
+func (c *ConsoleOutput) Close() error {
+	//TODO implement me
+	panic("implement me")
+}
 
 type KafkaOutput struct {
 	producer sarama.SyncProducer
@@ -519,24 +526,40 @@ func (c *ConsoleOutput) WriteMessage(topic string, msg []byte) error {
 	return nil
 }
 
-func (s *Simulator) CloseKafkaProducer(output OutputDestination) {
-	switch o := output.(type) {
-	case *KafkaOutput:
-		if o.producer != nil {
-			o.producer.Close()
-		}
-	}
-}
-
 func (s *Simulator) determineOutputDestination() OutputDestination {
 	if s.Config.KafkaEnabled {
-		// use local Kafka with Sarama
-		brokerList := strings.Split(s.Config.KafkaBrokerList, ",")
-		producer, err := createSaramaProducer(brokerList)
-		if err != nil {
-			log.Fatalf("Failed to create local Kafka producer: %s", err)
+		if s.Config.KafkaUseLocal {
+			// use Sarama for local Kafka
+			saramaProducer, err := simulator.NewSaramaProducer(s.Config)
+			if err != nil {
+				log.Fatalf("Failed to create Sarama producer: %v", err)
+			}
+			return saramaProducer
+		} else {
+			// use Confluent's Kafka client for Confluent Cloud
+			confluentConfig := kafka.ConfigMap{
+				"bootstrap.servers":       s.Config.KafkaBrokerList,
+				"security.protocol":       s.Config.KafkaSecurityProtocol,
+				"sasl.mechanisms":         s.Config.KafkaSaslMechanism,
+				"sasl.username":           s.Config.KafkaSaslUsername,
+				"sasl.password":           s.Config.KafkaSaslPassword,
+				"session.timeout.ms":      s.Config.SessionTimeoutMs,
+				"linger.ms":               10,
+				"batch.num.messages":      100,
+				"compression.type":        "snappy",
+				"message.timeout.ms":      300000, // 5 minutes
+				"enable.idempotence":      true,
+				"acks":                    "all",
+				"retry.backoff.ms":        100,
+				"socket.keepalive.enable": true,
+			}
+
+			confluentProducer, err := simulator.NewConfluentProducer(confluentConfig)
+			if err != nil {
+				log.Fatalf("Failed to create Confluent Kafka producer: %v", err)
+			}
+			return confluentProducer
 		}
-		return &KafkaOutput{producer: producer}
 	} else if s.Config.OutputPath != "" {
 		switch s.Config.OutputFormat {
 		case "parquet":
@@ -554,21 +577,4 @@ func (s *Simulator) determineOutputDestination() OutputDestination {
 		}
 	}
 	return &ConsoleOutput{}
-}
-
-func createSaramaProducer(brokerList []string) (sarama.SyncProducer, error) {
-	config := sarama.NewConfig()
-	config.Producer.RequiredAcks = sarama.WaitForAll
-	config.Producer.Retry.Max = 5
-	config.Producer.Retry.Backoff = 100 * time.Millisecond
-	config.Producer.Return.Successes = true
-	config.Net.DialTimeout = 30 * time.Second
-	config.Net.ReadTimeout = 30 * time.Second
-	config.Net.WriteTimeout = 30 * time.Second
-
-	producer, err := sarama.NewSyncProducer(brokerList, config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Kafka producer: %w", err)
-	}
-	return producer, nil
 }

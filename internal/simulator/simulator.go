@@ -1033,5 +1033,4 @@ func (s *Simulator) Run() {
 	wg.Wait()
 
 	log.Printf("Simulation completed at %s\n", time.Now().UTC().Format(time.RFC3339))
-	defer s.CloseKafkaProducer(output)
 }

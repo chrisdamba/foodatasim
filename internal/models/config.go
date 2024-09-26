@@ -30,27 +30,32 @@ type CloudStorageConfig struct {
 }
 
 type Config struct {
-	Seed               int                `mapstructure:"seed"`
-	StartDate          time.Time          `mapstructure:"start_date"`
-	EndDate            time.Time          `mapstructure:"end_date"`
-	InitialUsers       int                `mapstructure:"initial_users"`
-	InitialRestaurants int                `mapstructure:"initial_restaurants"`
-	InitialPartners    int                `mapstructure:"initial_partners"`
-	UserGrowthRate     float64            `mapstructure:"user_growth_rate"`
-	PartnerGrowthRate  float64            `mapstructure:"partner_growth_rate"`
-	OrderFrequency     float64            `mapstructure:"order_frequency"`
-	PeakHourFactor     float64            `mapstructure:"peak_hour_factor"`
-	WeekendFactor      float64            `mapstructure:"weekend_factor"`
-	TrafficVariability float64            `mapstructure:"traffic_variability"`
-	KafkaEnabled       bool               `mapstructure:"kafka_enabled"`
-	KafkaUseLocal      bool               `mapstructure:"kafka_use_local"`
-	KafkaBrokerList    string             `mapstructure:"kafka_broker_list"`
-	OutputFormat       string             `mapstructure:"output_format"`
-	OutputPath         string             `mapstructure:"output_path"`
-	OutputFolder       string             `mapstructure:"output_folder"`
-	Continuous         bool               `mapstructure:"continuous"`
-	OutputDestination  string             `mapstructure:"output_destination"`
-	CloudStorage       CloudStorageConfig `mapstructure:"cloud_storage"`
+	Seed                  int                `mapstructure:"seed"`
+	StartDate             time.Time          `mapstructure:"start_date"`
+	EndDate               time.Time          `mapstructure:"end_date"`
+	InitialUsers          int                `mapstructure:"initial_users"`
+	InitialRestaurants    int                `mapstructure:"initial_restaurants"`
+	InitialPartners       int                `mapstructure:"initial_partners"`
+	UserGrowthRate        float64            `mapstructure:"user_growth_rate"`
+	PartnerGrowthRate     float64            `mapstructure:"partner_growth_rate"`
+	OrderFrequency        float64            `mapstructure:"order_frequency"`
+	PeakHourFactor        float64            `mapstructure:"peak_hour_factor"`
+	WeekendFactor         float64            `mapstructure:"weekend_factor"`
+	TrafficVariability    float64            `mapstructure:"traffic_variability"`
+	KafkaEnabled          bool               `mapstructure:"kafka_enabled"`
+	KafkaUseLocal         bool               `mapstructure:"kafka_use_local"`
+	KafkaBrokerList       string             `mapstructure:"kafka_broker_list"`
+	KafkaSecurityProtocol string             `mapstructure:"kafka_security_protocol"`
+	KafkaSaslMechanism    string             `mapstructure:"kafka_sasl_mechanism"`
+	KafkaSaslUsername     string             `mapstructure:"kafka_sasl_username"`
+	KafkaSaslPassword     string             `mapstructure:"kafka_sasl_password"`
+	SessionTimeoutMs      int                `mapstructure:"session_timeout_ms"`
+	OutputFormat          string             `mapstructure:"output_format"`
+	OutputPath            string             `mapstructure:"output_path"`
+	OutputFolder          string             `mapstructure:"output_folder"`
+	Continuous            bool               `mapstructure:"continuous"`
+	OutputDestination     string             `mapstructure:"output_destination"`
+	CloudStorage          CloudStorageConfig `mapstructure:"cloud_storage"`
 	// Additional fields
 	CityName              string        `mapstructure:"city_name"`
 	DefaultCurrency       int           `mapstructure:"default_currency"`
@@ -106,7 +111,7 @@ func LoadConfig(cfgFile string) (*Config, error) {
 	viper.AutomaticEnv() // read in environment variables that match
 
 	// Replace dots with underscores in config keys when searching for environment variables
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 
 	// Bind environment variables to config keys
 	bindEnvVariables()
@@ -254,6 +259,11 @@ func bindEnvVariables() {
 		"kafka_enabled",
 		"kafka_use_local",
 		"kafka_broker_list",
+		"kafka_security_protocol",
+		"kafka_sasl_mechanism",
+		"kafka_sasl_username",
+		"kafka_sasl_password",
+		"session_timeout_ms",
 		"output_format",
 		"output_path",
 		"output_folder",
