@@ -7,6 +7,7 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/chrisdamba/foodatasim/internal/cloudwriter"
 	"github.com/chrisdamba/foodatasim/internal/models"
+	"github.com/chrisdamba/foodatasim/internal/output"
 	simulator "github.com/chrisdamba/foodatasim/internal/simulator/producers"
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/xitongsys/parquet-go-source/local"
@@ -563,11 +564,17 @@ func (s *Simulator) determineOutputDestination() OutputDestination {
 	} else if s.Config.OutputPath != "" {
 		switch s.Config.OutputFormat {
 		case "parquet":
-			output, err := NewParquetOutput(s.Config)
+			parquetOutput, err := NewParquetOutput(s.Config)
 			if err != nil {
 				log.Fatalf("Failed to create Parquet output: %s", err)
 			}
-			return output
+			return parquetOutput
+		case "postgres":
+			pgOutput, err := output.NewPostgresOutput(&s.Config.Database)
+			if err != nil {
+				log.Fatalf("Failed to create Postgres output: %s", err)
+			}
+			return pgOutput
 		case "json":
 			return NewJSONOutput(s.Config.OutputPath, s.Config.OutputFolder)
 		case "csv":

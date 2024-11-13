@@ -29,6 +29,15 @@ type CloudStorageConfig struct {
 	Region        string `mapstructure:"region"`
 }
 
+type DatabaseConfig struct {
+	Host     string `mapstructure:"host"`
+	Port     string `mapstructure:"port"`
+	User     string `mapstructure:"user"`
+	Password string `mapstructure:"password"`
+	DBName   string `mapstructure:"dbname"`
+	SSLMode  string `mapstructure:"sslmode"`
+}
+
 type Config struct {
 	Seed                  int                `mapstructure:"seed"`
 	StartDate             time.Time          `mapstructure:"start_date"`
@@ -55,6 +64,8 @@ type Config struct {
 	OutputFolder          string             `mapstructure:"output_folder"`
 	Continuous            bool               `mapstructure:"continuous"`
 	OutputDestination     string             `mapstructure:"output_destination"`
+	OutputTypes           []string           `mapstructure:"output_types"` // e.g. ["parquet", "postgres"
+	Database              DatabaseConfig     `mapstructure:"database"`
 	CloudStorage          CloudStorageConfig `mapstructure:"cloud_storage"`
 	// Additional fields
 	CityName              string        `mapstructure:"city_name"`

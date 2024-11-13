@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"github.com/chrisdamba/foodatasim/internal/models"
+	"github.com/chrisdamba/foodatasim/internal/output"
 	"github.com/jaswdr/faker"
 	"github.com/lucsky/cuid"
 	"log"
@@ -379,16 +380,44 @@ func (s *Simulator) generateTrafficDensity(t time.Time) float64 {
 }
 
 func (s *Simulator) generateOrders() {
+	var pgOutput *output.PostgresOutput
+	if s.Config.OutputTypes != nil && contains(s.Config.OutputTypes, "postgres") {
+		var err error
+		pgOutput, err = output.NewPostgresOutput(&s.Config.Database)
+		if err != nil {
+			log.Printf("Failed to initialize postgres output: %v", err)
+			return
+		}
+		defer pgOutput.Close()
+	}
+
+	// Collect orders in a batch
+	const batchSize = 1000
+	orderBatch := make([]*models.Order, 0, batchSize)
+
 	for _, user := range s.Users {
 		if s.shouldPlaceOrder(user) {
 			order := s.createOrder(user)
 			s.assignDeliveryPartner(order)
 			s.Orders = append(s.Orders, *order)
+			orderBatch = append(orderBatch, order)
 			s.EventQueue.Enqueue(&models.Event{
 				Time: s.CurrentTime,
 				Type: models.EventPlaceOrder,
 				Data: user,
 			})
+			if len(orderBatch) >= batchSize {
+				if err := s.persistOrderBatch(pgOutput, orderBatch); err != nil {
+					log.Printf("Failed to persist order batch: %v", err)
+				}
+				orderBatch = orderBatch[:0]
+			}
+		}
+	}
+
+	if len(orderBatch) > 0 {
+		if err := s.persistOrderBatch(pgOutput, orderBatch); err != nil {
+			log.Printf("Failed to persist remaining orders: %v", err)
 		}
 	}
 }
@@ -725,6 +754,35 @@ func (s *Simulator) removeCompletedOrders() {
 		}
 	}
 	s.Orders = activeOrders
+}
+
+func (s *Simulator) persistOrderBatch(pgOutput *output.PostgresOutput, orders []*models.Order) error {
+	if pgOutput == nil {
+		return nil
+	}
+
+	tx, err := pgOutput.BeginTx()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// insert orders
+	if err := pgOutput.BatchInsertOrdersTx(tx, orders); err != nil {
+		return fmt.Errorf("failed to insert orders: %w", err)
+	}
+
+	// update restaurant order counts
+	if err := pgOutput.UpdateRestaurantOrderCountsTx(tx, orders); err != nil {
+		return fmt.Errorf("failed to update restaurant order counts: %w", err)
+	}
+
+	// update user order counts
+	if err := pgOutput.UpdateUserOrderCountsTx(tx, orders); err != nil {
+		return fmt.Errorf("failed to update user order counts: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 func (s *Simulator) assignDeliveryPartner(order *models.Order) {

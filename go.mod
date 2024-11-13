@@ -1,6 +1,8 @@
 module github.com/chrisdamba/foodatasim
 
-go 1.20
+go 1.21
+
+toolchain go1.23.2
 
 require (
 	github.com/IBM/sarama v1.43.3
@@ -9,6 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.61.2
 	github.com/confluentinc/confluent-kafka-go/v2 v2.5.4
 	github.com/jaswdr/faker v1.19.1
+	github.com/lib/pq v1.10.9
 	github.com/lucsky/cuid v1.2.1
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/schollz/progressbar/v3 v3.14.6

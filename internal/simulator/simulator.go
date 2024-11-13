@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/chrisdamba/foodatasim/internal/factories"
 	"github.com/chrisdamba/foodatasim/internal/models"
+	"github.com/chrisdamba/foodatasim/internal/output"
 	"github.com/jaswdr/faker"
 	"github.com/schollz/progressbar/v3"
 	"io"
@@ -47,29 +48,92 @@ func NewSimulator(config *models.Config) *Simulator {
 	return sim
 }
 
-func (s *Simulator) initializeData() {
+func (s *Simulator) initializeData() error {
 	userFactory := &factories.UserFactory{}
 	restaurantFactory := &factories.RestaurantFactory{}
 	menuItemFactory := &factories.MenuItemFactory{}
 	deliveryPartnerFactory := &factories.DeliveryPartnerFactory{}
 
+	var pgOutput *output.PostgresOutput
+	if s.Config.OutputTypes != nil && contains(s.Config.OutputTypes, "postgres") {
+		var err error
+		pgOutput, err = output.NewPostgresOutput(&s.Config.Database)
+		if err != nil {
+			return fmt.Errorf("failed to initialise postgres output: %w", err)
+		}
+		defer pgOutput.Close()
+	}
+
+	const batchSize = 1000
+	userBatch := make([]*models.User, 0, batchSize)
+	restaurantBatch := make([]*models.Restaurant, 0, batchSize)
+	menuItemBatch := make([]*models.MenuItem, 0, batchSize)
+	deliveryPartnerBatch := make([]*models.DeliveryPartner, 0, batchSize)
+
 	// initialise users
+	log.Printf("Generating %d initial users...", s.Config.InitialUsers)
 	for i := 0; i < s.Config.InitialUsers; i++ {
-		s.Users[i] = userFactory.CreateUser(s.Config)
+		user := userFactory.CreateUser(s.Config)
+		s.Users[i] = user
+		userBatch = append(userBatch, user)
+
+		// flush batch if full
+		if len(userBatch) >= batchSize {
+			if err := pgOutput.BatchInsertUsers(userBatch); err != nil {
+				return fmt.Errorf("failed to batch insert users: %w", err)
+			}
+			userBatch = userBatch[:0]
+		}
+	}
+	// insert remaining users
+	if len(userBatch) > 0 {
+		if err := pgOutput.BatchInsertUsers(userBatch); err != nil {
+			return fmt.Errorf("failed to batch insert remaining users: %w", err)
+		}
 	}
 
 	// initialise restaurants
+	log.Printf("Generating %d initial restaurants...", s.Config.InitialRestaurants)
 	for i := 0; i < s.Config.InitialRestaurants; i++ {
 		restaurant := restaurantFactory.CreateRestaurant(s.Config)
 		s.Restaurants[restaurant.ID] = restaurant
+		restaurantBatch = append(restaurantBatch, restaurant)
+
+		if len(restaurantBatch) >= batchSize {
+			if err := pgOutput.BatchInsertRestaurants(restaurantBatch); err != nil {
+				return fmt.Errorf("failed to batch insert restaurants: %w", err)
+			}
+			restaurantBatch = restaurantBatch[:0]
+		}
+	}
+	if len(restaurantBatch) > 0 {
+		if err := pgOutput.BatchInsertRestaurants(restaurantBatch); err != nil {
+			return fmt.Errorf("failed to batch insert remaining restaurants: %w", err)
+		}
 	}
 
 	// initialise delivery partners
+	log.Printf("Generating %d initial delivery partners...", s.Config.InitialPartners)
 	for i := 0; i < s.Config.InitialPartners; i++ {
-		s.DeliveryPartners[i] = deliveryPartnerFactory.CreateDeliveryPartner(s.Config)
+		partner := deliveryPartnerFactory.CreateDeliveryPartner(s.Config)
+		s.DeliveryPartners[i] = partner
+		deliveryPartnerBatch = append(deliveryPartnerBatch, partner)
+
+		if len(deliveryPartnerBatch) >= batchSize {
+			if err := pgOutput.BatchInsertDeliveryPartners(deliveryPartnerBatch); err != nil {
+				return fmt.Errorf("failed to batch insert delivery partners: %w", err)
+			}
+			deliveryPartnerBatch = deliveryPartnerBatch[:0]
+		}
+	}
+	if len(deliveryPartnerBatch) > 0 {
+		if err := pgOutput.BatchInsertDeliveryPartners(deliveryPartnerBatch); err != nil {
+			return fmt.Errorf("failed to batch insert remaining delivery partners: %w", err)
+		}
 	}
 
 	// initialise menu items
+	log.Printf("Generating menu items for restaurants...")
 	fake := faker.New()
 	for restaurantID, restaurant := range s.Restaurants {
 		itemCount := fake.IntBetween(10, 30)
@@ -77,6 +141,19 @@ func (s *Simulator) initializeData() {
 			menuItem := menuItemFactory.CreateMenuItem(restaurant, s.Config)
 			s.MenuItems[menuItem.ID] = &menuItem
 			s.Restaurants[restaurantID].MenuItems = append(s.Restaurants[restaurantID].MenuItems, menuItem.ID)
+			menuItemBatch = append(menuItemBatch, &menuItem)
+
+			if len(menuItemBatch) >= batchSize {
+				if err := pgOutput.BatchInsertMenuItems(menuItemBatch); err != nil {
+					return fmt.Errorf("failed to batch insert menu items: %w", err)
+				}
+				menuItemBatch = menuItemBatch[:0]
+			}
+		}
+	}
+	if len(menuItemBatch) > 0 {
+		if err := pgOutput.BatchInsertMenuItems(menuItemBatch); err != nil {
+			return fmt.Errorf("failed to batch insert remaining menu items: %w", err)
 		}
 	}
 
@@ -87,16 +164,8 @@ func (s *Simulator) initializeData() {
 	s.OrdersByUser = make(map[string][]models.Order)
 	s.CompletedOrdersByRestaurant = make(map[string][]models.Order)
 
-	outputFolder := s.Config.OutputFolder
-	if outputFolder == "" {
-		outputFolder = "output" // Default to "output" if not specified
-	}
-	log.Printf("Cleaning and preparing output folder: %s", outputFolder)
-	if err := s.serializeInitialDataToCSV(outputFolder); err != nil {
-		log.Printf("Failed to serialize initial data to CSV: %v", err)
-	} else {
-		log.Printf("Initial data serialized to CSV in folder: %s", outputFolder)
-	}
+	log.Printf("Initial data generation and persistence completed")
+	return nil
 }
 
 func (s *Simulator) growUsers() {
