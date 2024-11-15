@@ -21,7 +21,7 @@ type BaseEvent struct {
 type OrderPlacedEvent struct {
 	BaseEvent
 	OrderID       string  `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
-	Items         string  `json:"itemIds" parquet:"name=itemIds,type=BYTE_ARRAY,convertedtype=UTF8"`
+	ItemIDs       string  `json:"itemIds" parquet:"name=itemIds,type=BYTE_ARRAY,convertedtype=UTF8"`
 	TotalAmount   float64 `json:"totalAmount" parquet:"name=totalAmount,type=DOUBLE"`
 	Status        string  `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
 	OrderPlacedAt int64   `json:"orderPlacedAt" parquet:"name=orderPlacedAt,type=INT64"`
@@ -93,6 +93,38 @@ type DeliveryStatusCheckEvent struct {
 	EstimatedDeliveryTime int64           `json:"estimatedDeliveryTime" parquet:"name=estimatedDeliveryTime,type=INT64"`
 	CurrentLocation       models.Location `json:"currentLocation" parquet:"name=currentLocation,type=STRUCT"`
 	NextCheckTime         int64           `json:"nextCheckTime" parquet:"name=nextCheckTime,type=INT64"`
+}
+
+type DeliveryPerformanceEvent struct {
+	ID                string           `json:"id"`
+	DeliveryPartnerID string           `json:"delivery_partner_id"`
+	OrderID           string           `json:"order_id"`
+	Timestamp         time.Time        `json:"timestamp"`
+	EventType         string           `json:"event_type"`
+	CurrentLocation   models.Location  `json:"current_location"`
+	NewLocation       *models.Location `json:"new_location,omitempty"`
+	EstimatedArrival  time.Time        `json:"estimated_arrival"`
+	ActualArrival     time.Time        `json:"actual_arrival"`
+	Speed             float64          `json:"speed"`
+	DistanceCovered   float64          `json:"distance_covered"`
+	Status            string           `json:"status"`
+	UpdateTime        time.Time        `json:"update_time"`
+	CurrentOrder      string           `json:"current_order"`
+}
+
+type RestaurantPerformanceEvent struct {
+	ID              string    `json:"id"`
+	RestaurantID    string    `json:"restaurant_id"`
+	Timestamp       time.Time `json:"timestamp"`
+	EventType       string    `json:"event_type"`
+	CurrentCapacity int       `json:"current_capacity"`
+	Capacity        int       `json:"capacity"`
+	OrdersInQueue   int       `json:"orders_in_queue"`
+	PrepTime        float64   `json:"prep_time"`
+	AvgPrepTime     float64   `json:"avg_prep_time"`
+	CurrentLoad     float64   `json:"current_load"`
+	EfficiencyScore float64   `json:"efficiency_score"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // OrderDeliveryEvent represents an order being delivered

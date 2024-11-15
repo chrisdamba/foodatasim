@@ -5,9 +5,30 @@ import (
 	"github.com/lucsky/cuid"
 	"math"
 	"math/rand"
+	"strings"
+	"sync"
 )
 
-type RestaurantFactory struct{}
+type RestaurantFactory struct{ usedSlugs sync.Map }
+
+func NewRestaurantFactory() *RestaurantFactory {
+	return &RestaurantFactory{}
+}
+
+func (rf *RestaurantFactory) generateUniqueSlug() string {
+	for {
+		name := fake.Company().Name()
+		slug := strings.ToLower(name)
+		slug = strings.ReplaceAll(slug, " ", "-")
+		slug = strings.ReplaceAll(slug, ",", "")
+		slug = strings.ReplaceAll(slug, ".", "")
+		slug = slug + "-" + strings.ToLower(cuid.New()[:6])
+
+		if _, exists := rf.usedSlugs.LoadOrStore(slug, true); !exists {
+			return slug
+		}
+	}
+}
 
 func (rf *RestaurantFactory) CreateRestaurant(config *models.Config) *models.Restaurant {
 	// calculate city bounds
@@ -32,7 +53,7 @@ func (rf *RestaurantFactory) CreateRestaurant(config *models.Config) *models.Res
 		Currency:       1, // assuming 1 represents the default currency
 		Phone:          fake.Phone().Number(),
 		Town:           fake.Address().City(),
-		SlugName:       fake.Internet().Slug(),
+		SlugName:       rf.generateUniqueSlug(),
 		WebsiteLogoURL: fake.Internet().URL(),
 		Offline:        "DISABLED",
 		Location: models.Location{

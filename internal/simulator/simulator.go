@@ -135,8 +135,11 @@ func (s *Simulator) initializeData() error {
 	// initialise menu items
 	log.Printf("Generating menu items for restaurants...")
 	fake := faker.New()
+	totalMenuItems := 0
 	for restaurantID, restaurant := range s.Restaurants {
 		itemCount := fake.IntBetween(10, 30)
+		log.Printf("Generating %d menu items for restaurant %s", itemCount, restaurantID)
+
 		for i := 0; i < itemCount; i++ {
 			menuItem := menuItemFactory.CreateMenuItem(restaurant, s.Config)
 			s.MenuItems[menuItem.ID] = &menuItem
@@ -145,17 +148,24 @@ func (s *Simulator) initializeData() error {
 
 			if len(menuItemBatch) >= batchSize {
 				if err := pgOutput.BatchInsertMenuItems(menuItemBatch); err != nil {
+					log.Printf("Failed to insert batch of menu items: %v", err)
 					return fmt.Errorf("failed to batch insert menu items: %w", err)
 				}
+				log.Printf("Successfully inserted batch of %d menu items", len(menuItemBatch))
 				menuItemBatch = menuItemBatch[:0]
 			}
+			totalMenuItems++
 		}
 	}
+
 	if len(menuItemBatch) > 0 {
 		if err := pgOutput.BatchInsertMenuItems(menuItemBatch); err != nil {
+			log.Printf("Failed to insert final batch of menu items: %v", err)
 			return fmt.Errorf("failed to batch insert remaining menu items: %w", err)
 		}
+		log.Printf("Successfully inserted final batch of %d menu items", len(menuItemBatch))
 	}
+	log.Printf("Total menu items generated: %d", totalMenuItems)
 
 	// initialise traffic conditions
 	s.initializeTrafficConditions()
@@ -262,7 +272,6 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 	case models.EventPlaceOrder:
 		user := event.Data.(*models.User)
 		baseEvent.UserID = user.ID
-		// create an order for this user
 		order, err := s.createAndAddOrder(user)
 		if err != nil {
 			return models.EventMessage{}, fmt.Errorf("failed to create order: %w", err)
@@ -272,7 +281,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		eventData = OrderPlacedEvent{
 			BaseEvent:     baseEvent,
 			OrderID:       order.ID,
-			Items:         strings.Join(order.Items, ","),
+			ItemIDs:       strings.Join(order.Items, ","),
 			TotalAmount:   order.TotalAmount,
 			Status:        order.Status,
 			OrderPlacedAt: order.OrderPlacedAt.Unix(),

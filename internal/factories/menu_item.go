@@ -10,14 +10,18 @@ import (
 type MenuItemFactory struct{}
 
 func (mf *MenuItemFactory) CreateMenuItem(restaurant *models.Restaurant, config *models.Config) models.MenuItem {
+	menuItemName := generateRandomMenuItem(restaurant.Cuisines, config)
+	if len(menuItemName) > 255 {
+		menuItemName = menuItemName[:252] + "..."
+	}
 	return models.MenuItem{
 		ID:                 cuid.New(),
 		RestaurantID:       restaurant.ID,
-		Name:               generateRandomMenuItem(restaurant.Cuisines, config),
-		Description:        fake.Lorem().Sentence(10),
+		Name:               sanitiseString(menuItemName),
+		Description:        sanitiseString(fake.Lorem().Sentence(10)),
 		Price:              fake.Float64(2, 5, 50),
 		PrepTime:           fake.Float64(0, 5, 30),
-		Category:           fake.Lorem().Word(),
+		Category:           sanitiseString(fake.Lorem().Word()),
 		Type:               generateRandomMenuItemType(),
 		Popularity:         fake.Float64(2, 0, 100) / 100,
 		PrepComplexity:     fake.Float64(2, 0, 100) / 100,
@@ -77,4 +81,26 @@ func generateRandomMenuItem(cuisines []string, config *models.Config) string {
 func generateRandomMenuItemType() string {
 	types := []string{"appetizer", "main course", "side dish", "dessert", "drink"}
 	return types[rand.Intn(len(types))]
+}
+
+func sanitiseString(s string) string {
+	// remove any non-printable characters and ensure UTF-8 validity
+	valid := make([]rune, 0, len(s))
+	for _, r := range s {
+		if r > 31 && r != 127 && r < 65533 { // filter out control characters and invalid Unicode
+			valid = append(valid, r)
+		}
+	}
+	// replace any remaining problematic characters with spaces
+	cleaned := strings.Map(func(r rune) rune {
+		if r < 32 || r >= 127 {
+			return ' '
+		}
+		return r
+	}, string(valid))
+
+	// remove multiple spaces
+	cleaned = strings.Join(strings.Fields(cleaned), " ")
+
+	return cleaned
 }

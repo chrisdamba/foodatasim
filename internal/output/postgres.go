@@ -2,13 +2,14 @@ package output
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/chrisdamba/foodatasim/internal/models"
 	"github.com/lib/pq"
 	"log"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -44,10 +45,59 @@ func (p *PostgresOutput) WriteMessage(topic string, msg []byte) error {
 	if err := json.Unmarshal(msg, &event); err != nil {
 		return err
 	}
-
 	table := topicToTable(topic)
+	if table == "fact_order" || table == "fact_user_behaviour" {
+		// remove id if it exists since fact_order uses event_id BIGSERIAL
+		delete(event, "id")
+	} else {
+		id := fmt.Sprintf("%s_%s_%s",
+			topic[:4],
+			time.Now().UTC().Format("20060102150405"),
+			generateRandomSuffix())
+		event["id"] = id
+	}
+
+	if timestamp, ok := event["timestamp"].(float64); ok {
+		event["timestamp"] = time.Unix(int64(timestamp), 0).Format("2006-01-02 15:04:05")
+	}
+
+	if topic == "restaurant_status_events" {
+		if event["current_capacity"] == nil {
+			event["current_capacity"] = event["capacity"]
+		}
+		if event["orders_in_queue"] == nil {
+			event["orders_in_queue"] = 0
+		}
+		if event["efficiency_score"] == nil && event["pickup_efficiency"] != nil {
+			event["efficiency_score"] = event["pickup_efficiency"]
+		}
+	}
+
+	if topic == "partner_location_events" || topic == "delivery_status_check_events" {
+		if ts, ok := event["timestamp"].(float64); ok {
+			event["timestamp"] = time.Unix(int64(ts), 0).Format("2006-01-02 15:04:05")
+		}
+		if updateTime, ok := event["update_time"].(float64); ok {
+			event["update_time"] = time.Unix(int64(updateTime), 0).Format("2006-01-02 15:04:05")
+		}
+		if loc, ok := event["new_location"].(map[string]interface{}); ok {
+			if lat, latOk := loc["lat"].(float64); latOk {
+				if lon, lonOk := loc["lon"].(float64); lonOk {
+					event["new_location"] = fmt.Sprintf("SRID=4326;POINT(%f %f)", lon, lat)
+				}
+			}
+		}
+		if loc, ok := event["current_location"].(map[string]interface{}); ok {
+			if lat, latOk := loc["lat"].(float64); latOk {
+				if lon, lonOk := loc["lon"].(float64); lonOk {
+					event["current_location"] = fmt.Sprintf("SRID=4326;POINT(%f %f)", lon, lat)
+				}
+			}
+		}
+	}
 
 	cols, vals, placeholders := buildInsertComponents(event)
+
 	query := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES (%s)",
 		table,
@@ -104,24 +154,41 @@ func (p *PostgresOutput) BatchInsertUsers(users []*models.User) error {
 func (p *PostgresOutput) BatchInsertRestaurants(restaurants []*models.Restaurant) error {
 	tx, err := p.db.Begin()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(pq.CopyIn("restaurants",
-		"id", "host", "name", "currency", "phone",
-		"town", "slug_name", "website_logo_url",
-		"offline", "location", "cuisines", "rating",
-		"total_ratings", "prep_time", "min_prep_time",
-		"avg_prep_time", "pickup_efficiency", "capacity"))
-	if err != nil {
-		return err
-	}
+	// Use a regular parameterized SQL INSERT
+	insertSQL := `
+        INSERT INTO restaurants (
+            id, host, name, currency, phone,
+            town, slug_name, website_logo_url, offline,
+            location, cuisines, rating, total_ratings,
+            prep_time, min_prep_time, avg_prep_time,
+            pickup_efficiency, capacity, created_at, updated_at
+        ) VALUES (
+            $1, $2, $3, $4, $5,
+            $6, $7, $8, $9::offline_status,
+            ST_SetSRID(ST_MakePoint($10, $11), 4326)::geography,
+            $12, $13, $14,
+            $15, $16, $17,
+            $18, $19, $20, $21
+        )
+    `
 
-	for _, restaurant := range restaurants {
-		point := fmt.Sprintf("POINT(%f %f)",
-			restaurant.Location.Lon,
-			restaurant.Location.Lat)
+	stmt, err := tx.Prepare(insertSQL)
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	now := time.Now().UTC()
+
+	for i, restaurant := range restaurants {
+		offlineStatus := "DISABLED"
+		if restaurant.Offline == "true" {
+			offlineStatus = "ENABLED"
+		}
 
 		_, err = stmt.Exec(
 			restaurant.ID,
@@ -132,8 +199,9 @@ func (p *PostgresOutput) BatchInsertRestaurants(restaurants []*models.Restaurant
 			restaurant.Town,
 			restaurant.SlugName,
 			restaurant.WebsiteLogoURL,
-			restaurant.Offline,
-			point,
+			offlineStatus,
+			restaurant.Location.Lon, // longitude
+			restaurant.Location.Lat, // latitude
 			pq.Array(restaurant.Cuisines),
 			restaurant.Rating,
 			restaurant.TotalRatings,
@@ -142,14 +210,20 @@ func (p *PostgresOutput) BatchInsertRestaurants(restaurants []*models.Restaurant
 			restaurant.AvgPrepTime,
 			restaurant.PickupEfficiency,
 			restaurant.Capacity,
+			now,
+			now,
 		)
 		if err != nil {
-			return err
+			log.Printf("Error inserting restaurant %d (ID: %s):", i, restaurant.ID)
+			log.Printf("Restaurant data: %+v", restaurant)
+			if pqErr, ok := err.(*pq.Error); ok {
+				log.Printf("PostgreSQL Error: %s", pqErr.Message)
+				log.Printf("PostgreSQL Detail: %s", pqErr.Detail)
+				log.Printf("PostgreSQL Hint: %s", pqErr.Hint)
+				log.Printf("PostgreSQL Code: %s", pqErr.Code)
+			}
+			return fmt.Errorf("failed to insert restaurant %s: %w", restaurant.ID, err)
 		}
-	}
-
-	if err = stmt.Close(); err != nil {
-		return err
 	}
 
 	return tx.Commit()
@@ -328,75 +402,41 @@ func (p *PostgresOutput) GetNearbyDeliveryPartners(loc models.Location, radius f
 func (p *PostgresOutput) BatchInsertMenuItems(menuItems []*models.MenuItem) error {
 	tx, err := p.db.Begin()
 	if err != nil {
+		log.Printf("Error beginning transaction: %v", err)
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	// Prepare statement for COPY operation
-	stmt, err := tx.Prepare(pq.CopyIn(
-		"menu_items",
-		"id",
-		"restaurant_id",
-		"name",
-		"description",
-		"price",
-		"prep_time",
-		"category",
-		"item_type",
-		"popularity",
-		"prep_complexity",
-		"ingredients",
-		"is_discount_eligible",
-		"created_at",
-		"updated_at",
-	))
-	if err != nil {
-		return fmt.Errorf("failed to prepare statement: %w", err)
-	}
-	defer stmt.Close()
-
-	// Current timestamp for created_at/updated_at
-	now := time.Now()
-
-	// Execute batch inserts
 	for _, item := range menuItems {
-		_, err = stmt.Exec(
+		_, err = tx.Exec(`
+            INSERT INTO menu_items (
+                id, restaurant_id, name, description, price,
+                prep_time, category, type, popularity,
+                prep_complexity, ingredients, is_discount_eligible
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::menu_item_type, $9, $10, $11, $12)
+        `,
 			item.ID,
 			item.RestaurantID,
 			item.Name,
-			nullableString(item.Description),
+			item.Description,
 			item.Price,
 			item.PrepTime,
 			item.Category,
 			item.Type,
 			item.Popularity,
 			item.PrepComplexity,
-			pq.Array(item.Ingredients), // Use pq.Array for string array
+			pq.Array(item.Ingredients),
 			item.IsDiscountEligible,
-			now, // created_at
-			now, // updated_at
 		)
 		if err != nil {
-			return fmt.Errorf("failed to exec statement for menu item %s: %w", item.ID, err)
+			log.Printf("Error inserting menu item %s: %v", item.ID, err)
+			log.Printf("Menu item data: %+v", item)
+			return fmt.Errorf("failed to insert menu item: %w", err)
 		}
 	}
 
-	// Close the statement and flush the buffer
-	err = stmt.Close()
-	if err != nil {
-		return fmt.Errorf("failed to close statement: %w", err)
-	}
-
-	// After inserting menu items, we might want to update the restaurant's menu count
-	// This is optional but helps maintain denormalized counts
-	err = p.updateRestaurantMenuCounts(tx)
-	if err != nil {
-		return fmt.Errorf("failed to update restaurant menu counts: %w", err)
-	}
-
-	// Commit transaction
-	err = tx.Commit()
-	if err != nil {
+	if err = tx.Commit(); err != nil {
+		log.Printf("Error committing transaction: %v", err)
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
@@ -755,71 +795,6 @@ func nullableTime(t time.Time) sql.NullTime {
 	}
 }
 
-func nullableFloat64(f float64) sql.NullFloat64 {
-	if math.IsNaN(f) || math.IsInf(f, 0) {
-		return sql.NullFloat64{}
-	}
-	return sql.NullFloat64{
-		Float64: f,
-		Valid:   true,
-	}
-}
-
-func nullableInt64(i int64) sql.NullInt64 {
-	if i == 0 { // or some other sentinel value
-		return sql.NullInt64{}
-	}
-	return sql.NullInt64{
-		Int64: i,
-		Valid: true,
-	}
-}
-
-func nullableBool(b *bool) sql.NullBool {
-	if b == nil {
-		return sql.NullBool{}
-	}
-	return sql.NullBool{
-		Bool:  *b,
-		Valid: true,
-	}
-}
-
-func timeFromNullable(nt sql.NullTime) time.Time {
-	if !nt.Valid {
-		return time.Time{} // zero time
-	}
-	return nt.Time
-}
-
-func stringFromNullable(ns sql.NullString) string {
-	if !ns.Valid {
-		return ""
-	}
-	return ns.String
-}
-
-func float64FromNullable(nf sql.NullFloat64) float64 {
-	if !nf.Valid {
-		return 0.0
-	}
-	return nf.Float64
-}
-
-func int64FromNullable(ni sql.NullInt64) int64 {
-	if !ni.Valid {
-		return 0
-	}
-	return ni.Int64
-}
-
-func boolFromNullable(nb sql.NullBool) bool {
-	if !nb.Valid {
-		return false
-	}
-	return nb.Bool
-}
-
 func isRetryableError(err error) bool {
 	if err == nil {
 		return false
@@ -838,13 +813,9 @@ func isRetryableError(err error) bool {
 	return false
 }
 
-func locationToPoint(loc models.Location) string {
-	return fmt.Sprintf("POINT(%f %f)", loc.Lon, loc.Lat)
-}
-
 func topicToTable(topic string) string {
 	tableMap := map[string]string{
-		// fact Tables
+		// order related facts
 		"order_placed_events":       "fact_order",
 		"order_preparation_events":  "fact_order",
 		"order_ready_events":        "fact_order",
@@ -853,60 +824,61 @@ func topicToTable(topic string) string {
 		"order_cancellation_events": "fact_order",
 		"order_in_transit_events":   "fact_order",
 
-		"delivery_status_check_events": "fact_delivery_performance",
-		"partner_location_events":      "fact_delivery_performance",
-		"delivery_partner_events":      "fact_delivery_performance",
+		// delivery performance facts
+		"delivery_status_check_events":   "fact_delivery_performance",
+		"partner_location_events":        "fact_delivery_performance",
+		"delivery_partner_events":        "fact_delivery_performance",
+		"delivery_partner_status_events": "fact_partner_status",
+		"delivery_partner_shift_events":  "fact_partner_status",
 
-		"restaurant_status_events":  "fact_restaurant_performance",
-		"restaurant_metrics_events": "fact_restaurant_performance",
+		// restaurant performance facts
+		"restaurant_status_events":   "fact_restaurant_performance",
+		"restaurant_metrics_events":  "fact_restaurant_performance",
+		"restaurant_menu_events":     "fact_restaurant_changes",
+		"restaurant_capacity_events": "fact_restaurant_changes",
+		"restaurant_hours_events":    "fact_restaurant_changes",
 
+		// user/customer facts
+		"user_behaviour_events":  "fact_user_behaviour",
+		"user_preference_events": "fact_user_behaviour",
+
+		// review facts
 		"review_events": "fact_review",
 
-		// Dimension Tables
-		"user_behaviour_events":  "dim_customer",
-		"user_preference_events": "dim_customer",
-
-		"restaurant_menu_events":     "dim_restaurant",
-		"restaurant_capacity_events": "dim_restaurant",
-		"restaurant_hours_events":    "dim_restaurant",
-
-		"delivery_partner_status_events": "dim_delivery_partner",
-		"delivery_partner_shift_events":  "dim_delivery_partner",
-
-		// Time and Location based events
+		// time and location based facts
 		"traffic_condition_events": "fact_traffic_condition",
 		"weather_condition_events": "fact_weather_condition",
 		"peak_hour_events":         "fact_peak_hours",
 
-		// Menu related events
-		"menu_item_events":         "dim_menu_item",
+		// menu related facts
+		"menu_item_events":         "fact_menu_changes",
 		"menu_price_events":        "fact_menu_price",
 		"menu_availability_events": "fact_menu_availability",
 
-		// Promotion and discount events
+		// promotion and discount facts
 		"promotion_events": "fact_promotion",
 		"discount_events":  "fact_discount",
 
-		// Payment events
+		// payment facts
 		"payment_events": "fact_payment",
 		"refund_events":  "fact_refund",
 
-		// Service metrics events
+		// service metrics facts
 		"service_quality_events":       "fact_service_quality",
 		"delivery_time_events":         "fact_delivery_time",
 		"customer_satisfaction_events": "fact_customer_satisfaction",
 
-		// Cost and revenue events
+		// financial facts
 		"revenue_events":    "fact_revenue",
 		"cost_events":       "fact_cost",
 		"commission_events": "fact_commission",
 
-		// Operational events
+		// operational facts
 		"capacity_utilization_events": "fact_capacity_utilization",
 		"efficiency_metrics_events":   "fact_efficiency_metrics",
 		"performance_metrics_events":  "fact_performance_metrics",
 
-		// Integration events
+		// system facts
 		"notification_events":  "fact_notification",
 		"communication_events": "fact_communication",
 		"system_events":        "fact_system_log",
@@ -922,45 +894,52 @@ func topicToTable(topic string) string {
 }
 
 func buildInsertComponents(event map[string]interface{}) (string, []interface{}, string) {
-	// store columns and values in sorted order for consistent queries
 	var columns []string
 	var values []interface{}
 	var placeholderNum int
 	var placeholders []string
 
-	// get sorted keys to ensure consistent order
 	keys := make([]string, 0, len(event))
 	for k := range event {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
-	// build columns and values arrays
 	for _, key := range keys {
 		val := event[key]
 
-		// special handling for different types
 		switch v := val.(type) {
 		case time.Time:
-			values = append(values, v)
+			values = append(values, v.Format("2006-01-02 15:04:05"))
+		case float64:
+			if isTimestampField(key) {
+				values = append(values, time.Unix(int64(v), 0).Format("2006-01-02 15:04:05"))
+			} else if isNumericField(key) {
+				values = append(values, fmt.Sprintf("%.2f", v))
+			} else {
+				values = append(values, v)
+			}
 		case models.Location:
-			// convert location to PostGIS point
-			values = append(values, fmt.Sprintf("POINT(%f %f)", v.Lon, v.Lat))
+			point := fmt.Sprintf("ST_SetSRID(ST_MakePoint(%f, %f), 4326)", v.Lon, v.Lat)
+			values = append(values, point)
 		case []string:
 			values = append(values, pq.Array(v))
 		case map[string]interface{}:
-			// convert maps to JSONB
-			jsonBytes, err := json.Marshal(v)
-			if err != nil {
-				log.Printf("Error marshaling JSON for key %s: %v", key, err)
-				continue
+			if isLocationMap(v) {
+				lat, lon := getLocationCoords(v)
+				values = append(values, fmt.Sprintf("SRID=4326;POINT(%f %f)", lon, lat))
+			} else {
+				jsonBytes, err := json.Marshal(v)
+				if err != nil {
+					log.Printf("Error marshaling JSON for key %s: %v", key, err)
+					continue
+				}
+				values = append(values, string(jsonBytes))
 			}
-			values = append(values, string(jsonBytes))
 		default:
 			values = append(values, v)
 		}
 
-		// add column name and placeholder
 		columns = append(columns, snakeCaseKey(key))
 		placeholderNum++
 		placeholders = append(placeholders, fmt.Sprintf("$%d", placeholderNum))
@@ -969,6 +948,58 @@ func buildInsertComponents(event map[string]interface{}) (string, []interface{},
 	return strings.Join(columns, ", "),
 		values,
 		strings.Join(placeholders, ", ")
+}
+
+func isLocationMap(m map[string]interface{}) bool {
+	_, hasLat := m["lat"]
+	_, hasLon := m["lon"]
+	return hasLat && hasLon
+}
+
+func isNumericField(key string) bool {
+	numericFields := map[string]bool{
+		"prep_time":         true,
+		"avg_prep_time":     true,
+		"current_load":      true,
+		"efficiency_score":  true,
+		"pickup_efficiency": true,
+		"speed":             true,
+		"distance_covered":  true,
+		"rating":            true,
+		"total_ratings":     true,
+	}
+	return numericFields[key]
+}
+
+func isTimestampField(field string) bool {
+	timestampFields := map[string]bool{
+		"timestamp":               true,
+		"update_time":             true,
+		"estimated_arrival":       true,
+		"actual_arrival":          true,
+		"created_at":              true,
+		"last_update_time":        true,
+		"order_placed_at":         true,
+		"prep_start_time":         true,
+		"estimated_pickup_time":   true,
+		"estimated_delivery_time": true,
+		"pickup_time":             true,
+		"in_transit_time":         true,
+		"actual_delivery_time":    true,
+	}
+	return timestampFields[field]
+}
+
+func generateRandomSuffix() string {
+	b := make([]byte, 3)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func getLocationCoords(m map[string]interface{}) (float64, float64) {
+	lat, _ := m["lat"].(float64)
+	lon, _ := m["lon"].(float64)
+	return lat, lon
 }
 
 func snakeCaseKey(key string) string {
