@@ -277,6 +277,27 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		}
 		baseEvent.RestaurantID = order.RestaurantID
 
+		pgOutput, err := output.NewPostgresOutput(&s.Config.Database)
+		if err != nil {
+			return models.EventMessage{}, fmt.Errorf("failed to create postgres output: %w", err)
+		}
+		defer pgOutput.Close()
+
+		tx, err := pgOutput.BeginTx()
+		if err != nil {
+			return models.EventMessage{}, fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer tx.Rollback()
+
+		err = pgOutput.BatchInsertOrdersTx(tx, []*models.Order{order})
+		if err != nil {
+			return models.EventMessage{}, fmt.Errorf("failed to insert order: %w", err)
+		}
+
+		if err = tx.Commit(); err != nil {
+			return models.EventMessage{}, fmt.Errorf("failed to commit transaction: %w", err)
+		}
+
 		eventData = OrderPlacedEvent{
 			BaseEvent:       baseEvent,
 			OrderID:         order.ID,
@@ -372,12 +393,13 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		if partner == nil {
 			return models.EventMessage{}, fmt.Errorf("delivery partner not found for order %s", order.ID)
 		}
+		baseEvent.UserID = order.CustomerID
+		baseEvent.RestaurantID = order.RestaurantID
 
 		eventData = OrderInTransitEvent{
 			BaseEvent:             baseEvent,
 			OrderID:               order.ID,
 			DeliveryPartnerID:     order.DeliveryPartnerID,
-			CustomerID:            order.CustomerID,
 			CurrentLocation:       models.Location{Lat: partner.CurrentLocation.Lat, Lon: partner.CurrentLocation.Lon},
 			EstimatedDeliveryTime: order.EstimatedDeliveryTime,
 			PickupTime:            order.PickupTime,
@@ -420,8 +442,8 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			BaseEvent:             baseEvent,
 			OrderID:               order.ID,
 			Status:                order.Status,
-			EstimatedDeliveryTime: safeUnixTime(order.EstimatedDeliveryTime),
-			ActualDeliveryTime:    safeUnixTime(order.ActualDeliveryTime),
+			EstimatedDeliveryTime: order.EstimatedDeliveryTime,
+			ActualDeliveryTime:    order.ActualDeliveryTime,
 		}
 		topic = "order_delivery_events"
 

@@ -488,6 +488,7 @@ func (p *PostgresOutput) BatchInsertOrdersTx(tx *sql.Tx, orders []*models.Order)
 		"prep_start_time",
 		"estimated_pickup_time",
 		"estimated_delivery_time",
+		"next_check_time",
 		"pickup_time",
 		"in_transit_time",
 		"actual_delivery_time",
