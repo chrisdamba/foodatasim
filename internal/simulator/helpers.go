@@ -439,9 +439,15 @@ func (s *Simulator) createOrder(user *models.User) *models.Order {
 		RestaurantID:  restaurant.ID,
 		Items:         items,
 		TotalAmount:   totalAmount,
+		DeliveryCost:  s.calculateDeliveryFee(totalAmount),
 		OrderPlacedAt: s.CurrentTime,
 		PrepStartTime: s.CurrentTime.Add(time.Minute * time.Duration(s.Rng.Intn(5))),
 		Status:        "placed",
+		PaymentMethod: s.selectPaymentMethod(),
+		Address: models.Address{
+			Latitude:  user.Location.Lat,
+			Longitude: user.Location.Lon,
+		},
 	}
 
 	order.PickupTime = order.PrepStartTime.Add(time.Minute * time.Duration(prepTime))
@@ -770,16 +776,6 @@ func (s *Simulator) persistOrderBatch(pgOutput *output.PostgresOutput, orders []
 	// insert orders
 	if err := pgOutput.BatchInsertOrdersTx(tx, orders); err != nil {
 		return fmt.Errorf("failed to insert orders: %w", err)
-	}
-
-	// update restaurant order counts
-	if err := pgOutput.UpdateRestaurantOrderCountsTx(tx, orders); err != nil {
-		return fmt.Errorf("failed to update restaurant order counts: %w", err)
-	}
-
-	// update user order counts
-	if err := pgOutput.UpdateUserOrderCountsTx(tx, orders); err != nil {
-		return fmt.Errorf("failed to update user order counts: %w", err)
 	}
 
 	return tx.Commit()
@@ -1204,10 +1200,10 @@ func (s *Simulator) calculateDeliveryFee(subtotal float64) float64 {
 		return 0
 	}
 
-	// Base delivery fee
+	// base delivery fee
 	fee := s.Config.BaseDeliveryFee
 
-	// Additional fee for small orders
+	// additional fee for small orders
 	if subtotal < s.Config.SmallOrderThreshold {
 		fee += s.Config.SmallOrderFee
 	}
@@ -1340,6 +1336,11 @@ func (s *Simulator) isUrbanArea(loc models.Location) bool {
 	// For simplicity, let's assume a central urban area:
 	cityCenter := models.Location{Lat: s.Config.CityLat, Lon: s.Config.CityLon}
 	return s.calculateDistance(loc, cityCenter) <= s.Config.UrbanRadius
+}
+
+func (s *Simulator) selectPaymentMethod() string {
+	methods := []string{"card", "cash", "wallet"}
+	return methods[s.Rng.Intn(len(methods))]
 }
 
 func (s *Simulator) getPartnerIndex(partnerID string) int {

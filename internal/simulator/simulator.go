@@ -13,7 +13,6 @@ import (
 	"math"
 	"math/rand"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 )
@@ -279,36 +278,42 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		baseEvent.RestaurantID = order.RestaurantID
 
 		eventData = OrderPlacedEvent{
-			BaseEvent:     baseEvent,
-			OrderID:       order.ID,
-			ItemIDs:       strings.Join(order.Items, ","),
-			TotalAmount:   order.TotalAmount,
-			Status:        order.Status,
-			OrderPlacedAt: order.OrderPlacedAt.Unix(),
+			BaseEvent:       baseEvent,
+			OrderID:         order.ID,
+			ItemIDs:         order.Items,
+			TotalAmount:     order.TotalAmount,
+			Status:          order.Status,
+			OrderPlacedAt:   order.OrderPlacedAt,
+			DeliveryAddress: order.Address,
 		}
 		topic = "order_placed_events"
 
 	case models.EventPrepareOrder:
 		order := event.Data.(*models.Order)
-		baseEvent.RestaurantID = order.RestaurantID
-
-		eventData = OrderPreparationEvent{
-			BaseEvent:     baseEvent,
-			OrderID:       order.ID,
-			Status:        order.Status,
-			PrepStartTime: order.PrepStartTime.Unix(),
+		eventData = map[string]interface{}{
+			"order_id":         order.ID,
+			"user_id":          order.CustomerID,
+			"restaurant_id":    order.RestaurantID,
+			"event_type":       event.Type,
+			"timestamp":        event.Time,
+			"total_amount":     order.TotalAmount,
+			"status":           order.Status,
+			"order_placed_at":  order.OrderPlacedAt,
+			"delivery_address": order.Address,
 		}
 		topic = "order_preparation_events"
 
 	case models.EventOrderReady:
 		order := event.Data.(*models.Order)
 		baseEvent.RestaurantID = order.RestaurantID
+		baseEvent.UserID = order.CustomerID
 
 		eventData = OrderReadyEvent{
-			BaseEvent:  baseEvent,
-			OrderID:    order.ID,
-			Status:     order.Status,
-			PickupTime: order.PickupTime.Unix(),
+			BaseEvent:       baseEvent,
+			OrderID:         order.ID,
+			Status:          order.Status,
+			PickupTime:      order.PickupTime,
+			DeliveryAddress: order.Address,
 		}
 		topic = "order_ready_events"
 
@@ -316,12 +321,13 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		order := event.Data.(*models.Order)
 		baseEvent.RestaurantID = order.RestaurantID
 		baseEvent.DeliveryID = order.DeliveryPartnerID
+		baseEvent.UserID = order.CustomerID
 
 		eventData = DeliveryPartnerAssignmentEvent{
 			BaseEvent:           baseEvent,
 			OrderID:             order.ID,
 			Status:              order.Status,
-			EstimatedPickupTime: order.EstimatedPickupTime.Unix(),
+			EstimatedPickupTime: order.EstimatedPickupTime,
 		}
 		topic = "delivery_partner_assignment_events"
 
@@ -329,13 +335,14 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		order := event.Data.(*models.Order)
 		baseEvent.RestaurantID = order.RestaurantID
 		baseEvent.DeliveryID = order.DeliveryPartnerID
+		baseEvent.UserID = order.CustomerID
 
 		eventData = OrderPickupEvent{
 			BaseEvent:             baseEvent,
 			OrderID:               order.ID,
 			Status:                order.Status,
-			PickupTime:            order.PickupTime.Unix(),
-			EstimatedDeliveryTime: order.EstimatedDeliveryTime.Unix(),
+			PickupTime:            order.PickupTime,
+			EstimatedDeliveryTime: order.EstimatedDeliveryTime,
 		}
 		topic = "order_pickup_events"
 
@@ -347,15 +354,15 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 		}
 
 		eventData = PartnerLocationUpdateEvent{
-			Timestamp:    event.Time.Unix(),
-			EventType:    event.Type,
-			PartnerID:    update.PartnerID,
-			OrderID:      update.OrderID,
-			NewLocation:  models.Location{Lat: update.NewLocation.Lat, Lon: update.NewLocation.Lon},
-			CurrentOrder: partner.CurrentOrderID,
-			Status:       partner.Status,
-			UpdateTime:   s.CurrentTime.Unix(),
-			Speed:        update.Speed,
+			Timestamp:         event.Time,
+			EventType:         event.Type,
+			DeliveryPartnerID: update.PartnerID,
+			OrderID:           update.OrderID,
+			NewLocation:       models.Location{Lat: update.NewLocation.Lat, Lon: update.NewLocation.Lon},
+			CurrentOrder:      partner.CurrentOrderID,
+			Status:            partner.Status,
+			UpdateTime:        s.CurrentTime,
+			Speed:             update.Speed,
 		}
 		topic = "partner_location_events"
 
@@ -372,8 +379,8 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			DeliveryPartnerID:     order.DeliveryPartnerID,
 			CustomerID:            order.CustomerID,
 			CurrentLocation:       models.Location{Lat: partner.CurrentLocation.Lat, Lon: partner.CurrentLocation.Lon},
-			EstimatedDeliveryTime: order.EstimatedDeliveryTime.Unix(),
-			PickupTime:            order.PickupTime.Unix(),
+			EstimatedDeliveryTime: order.EstimatedDeliveryTime,
+			PickupTime:            order.PickupTime,
 			Status:                order.Status,
 		}
 		topic = "order_in_transit_events"
@@ -397,9 +404,9 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			BaseEvent:             baseEvent,
 			OrderID:               order.ID,
 			Status:                order.Status,
-			EstimatedDeliveryTime: order.EstimatedDeliveryTime.Unix(),
+			EstimatedDeliveryTime: order.EstimatedDeliveryTime,
 			CurrentLocation:       currentLocation,
-			NextCheckTime:         event.Time.Unix(),
+			NextCheckTime:         event.Time,
 		}
 		topic = "delivery_status_check_events"
 
@@ -471,9 +478,10 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 
 		capacity := restaurant.Capacity
 		eventData = RestaurantStatusUpdateEvent{
-			BaseEvent: baseEvent,
-			Capacity:  &capacity,
-			PrepTime:  &prepTime,
+			BaseEvent:       baseEvent,
+			Capacity:        int32(capacity),
+			CurrentCapacity: int32(capacity),
+			PrepTime:        prepTime,
 		}
 		topic = "restaurant_status_events"
 
@@ -501,7 +509,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			DeliveryRating:    review.DeliveryRating,
 			OverallRating:     review.OverallRating,
 			Comment:           review.Comment,
-			CreatedAt:         review.CreatedAt.Unix(),
+			CreatedAt:         review.CreatedAt,
 			OrderTotal:        order.TotalAmount,
 			DeliveryTime:      order.ActualDeliveryTime.Sub(order.OrderPlacedAt).Milliseconds(),
 		}
@@ -560,6 +568,10 @@ func (s *Simulator) cleanupSimulationState() {
 					log.Printf("Correcting inconsistent state: Order %s assigned to non-existent or mismatched partner. Resetting.",
 						order.ID)
 					s.Orders[i].DeliveryPartnerID = ""
+					// update order status if needed
+					if s.Orders[i].Status == models.OrderStatusInTransit {
+						s.Orders[i].Status = models.OrderStatusPlaced
+					}
 					// try to reassign the order
 					s.assignDeliveryPartner(&s.Orders[i])
 				}

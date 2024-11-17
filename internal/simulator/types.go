@@ -20,57 +20,60 @@ type BaseEvent struct {
 // OrderPlacedEvent represents an order being placed
 type OrderPlacedEvent struct {
 	BaseEvent
-	OrderID       string  `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
-	ItemIDs       string  `json:"itemIds" parquet:"name=itemIds,type=BYTE_ARRAY,convertedtype=UTF8"`
-	TotalAmount   float64 `json:"totalAmount" parquet:"name=totalAmount,type=DOUBLE"`
-	Status        string  `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
-	OrderPlacedAt int64   `json:"orderPlacedAt" parquet:"name=orderPlacedAt,type=INT64"`
+	OrderID         string         `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
+	ItemIDs         []string       `json:"itemIds" parquet:"name=itemIds,type=BYTE_ARRAY,convertedtype=UTF8"`
+	TotalAmount     float64        `json:"totalAmount" parquet:"name=totalAmount,type=DOUBLE"`
+	Status          string         `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
+	OrderPlacedAt   time.Time      `json:"orderPlacedAt" parquet:"name=orderPlacedAt,type=INT64"`
+	DeliveryAddress models.Address `json:"deliveryAddress" parquet:"name=newLocation,type=STRUCT"`
 }
 
 // OrderPreparationEvent represents an order being prepared
 type OrderPreparationEvent struct {
 	BaseEvent
-	OrderID       string `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
-	Status        string `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
-	PrepStartTime int64  `json:"prepStartTime" parquet:"name=prepStartTime,type=INT64"`
+	OrderID         string         `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
+	Status          string         `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
+	PrepStartTime   time.Time      `json:"prepStartTime" parquet:"name=prepStartTime,type=INT64"`
+	DeliveryAddress models.Address `json:"deliveryAddress" parquet:"name=newLocation,type=STRUCT"`
 }
 
 // OrderReadyEvent represents an order being ready for pickup
 type OrderReadyEvent struct {
 	BaseEvent
-	OrderID    string `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
-	Status     string `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
-	PickupTime int64  `json:"pickupTime" parquet:"name=pickupTime,type=INT64"`
+	OrderID         string         `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
+	Status          string         `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
+	PickupTime      time.Time      `json:"pickupTime" parquet:"name=pickupTime,type=INT64"`
+	DeliveryAddress models.Address `json:"deliveryAddress" parquet:"name=newLocation,type=STRUCT"`
 }
 
 // DeliveryPartnerAssignmentEvent represents a delivery partner being assigned to an order
 type DeliveryPartnerAssignmentEvent struct {
 	BaseEvent
-	OrderID             string `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
-	Status              string `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
-	EstimatedPickupTime int64  `json:"estimatedPickupTime" parquet:"name=estimatedPickupTime,type=INT64"`
+	OrderID             string    `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
+	Status              string    `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
+	EstimatedPickupTime time.Time `json:"estimatedPickupTime" parquet:"name=estimatedPickupTime,type=INT64"`
 }
 
 // OrderPickupEvent represents an order being picked up by a delivery partner
 type OrderPickupEvent struct {
 	BaseEvent
-	OrderID               string `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
-	Status                string `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
-	PickupTime            int64  `json:"pickupTime" parquet:"name=pickupTime,type=INT64"`
-	EstimatedDeliveryTime int64  `json:"estimatedDeliveryTime" parquet:"name=estimatedDeliveryTime,type=INT64"`
+	OrderID               string    `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
+	Status                string    `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
+	PickupTime            time.Time `json:"pickupTime" parquet:"name=pickupTime,type=INT64"`
+	EstimatedDeliveryTime time.Time `json:"estimatedDeliveryTime" parquet:"name=estimatedDeliveryTime,type=INT64"`
 }
 
 // PartnerLocationUpdateEvent represents an update to a delivery partner's location
 type PartnerLocationUpdateEvent struct {
-	Timestamp    int64           `json:"timestamp" parquet:"name=timestamp,type=INT64"`
-	EventType    string          `json:"eventType" parquet:"name=eventType,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8"`
-	PartnerID    string          `json:"partnerId" parquet:"name=partnerId,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8"`
-	OrderID      string          `json:"orderId,omitempty" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
-	NewLocation  models.Location `json:"newLocation" parquet:"name=newLocation,type=STRUCT"`
-	CurrentOrder string          `json:"currentOrder,omitempty" parquet:"name=currentOrder,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
-	Status       string          `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8"`
-	UpdateTime   int64           `json:"updateTime" parquet:"name=updateTime,type=INT64"`
-	Speed        float64         `json:"speed,omitempty" parquet:"name=speed,type=DOUBLE,repetitiontype=OPTIONAL"`
+	Timestamp         time.Time       `json:"timestamp" parquet:"name=timestamp,type=INT64"`
+	EventType         string          `json:"eventType" parquet:"name=eventType,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8"`
+	DeliveryPartnerID string          `json:"deliveryPartnerId" parquet:"name=deliveryPartnerId,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8"`
+	OrderID           string          `json:"orderId,omitempty" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
+	NewLocation       models.Location `json:"newLocation" parquet:"name=newLocation,type=STRUCT"`
+	CurrentOrder      string          `json:"currentOrder,omitempty" parquet:"name=currentOrder,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
+	Status            string          `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8"`
+	UpdateTime        time.Time       `json:"updateTime" parquet:"name=updateTime,type=INT64"`
+	Speed             float64         `json:"speed,omitempty" parquet:"name=speed,type=DOUBLE,repetitiontype=OPTIONAL"`
 }
 
 // OrderInTransitEvent represents an order being in transit
@@ -80,8 +83,8 @@ type OrderInTransitEvent struct {
 	DeliveryPartnerID     string          `json:"deliveryPartnerId" parquet:"name=deliveryPartnerId,type=BYTE_ARRAY,convertedtype=UTF8"`
 	CustomerID            string          `json:"customerId" parquet:"name=customerId,type=BYTE_ARRAY,convertedtype=UTF8"`
 	CurrentLocation       models.Location `json:"currentLocation" parquet:"name=currentLocation,type=STRUCT"`
-	EstimatedDeliveryTime int64           `json:"estimatedDeliveryTime" parquet:"name=estimatedDeliveryTime,type=INT64"`
-	PickupTime            int64           `json:"pickupTime" parquet:"name=pickupTime,type=INT64"`
+	EstimatedDeliveryTime time.Time       `json:"estimatedDeliveryTime" parquet:"name=estimatedDeliveryTime,type=INT64"`
+	PickupTime            time.Time       `json:"pickupTime" parquet:"name=pickupTime,type=INT64"`
 	Status                string          `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
 }
 
@@ -90,9 +93,9 @@ type DeliveryStatusCheckEvent struct {
 	BaseEvent
 	OrderID               string          `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
 	Status                string          `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
-	EstimatedDeliveryTime int64           `json:"estimatedDeliveryTime" parquet:"name=estimatedDeliveryTime,type=INT64"`
+	EstimatedDeliveryTime time.Time       `json:"estimatedDeliveryTime" parquet:"name=estimatedDeliveryTime,type=INT64"`
 	CurrentLocation       models.Location `json:"currentLocation" parquet:"name=currentLocation,type=STRUCT"`
-	NextCheckTime         int64           `json:"nextCheckTime" parquet:"name=nextCheckTime,type=INT64"`
+	NextCheckTime         time.Time       `json:"nextCheckTime" parquet:"name=nextCheckTime,type=INT64"`
 }
 
 type DeliveryPerformanceEvent struct {
@@ -156,24 +159,26 @@ type UserBehaviourUpdateEvent struct {
 // RestaurantStatusUpdateEvent represents an update to a restaurant's status
 type RestaurantStatusUpdateEvent struct {
 	BaseEvent
-	Capacity *int     `json:"capacity" parquet:"name=capacity,type=INT32,repetitiontype=OPTIONAL"`
-	PrepTime *float64 `json:"prepTime" parquet:"name=prepTime,type=DOUBLE,repetitiontype=OPTIONAL"`
+	Capacity        int32   `json:"capacity" parquet:"name=capacity,type=INT32"`
+	CurrentCapacity int32   `json:"current_capacity" parquet:"name=current_capacity,type=INT32"`
+	OrdersInQueue   int32   `json:"orders_in_queue" parquet:"name=orders_in_queue,type=INT32"`
+	PrepTime        float64 `json:"prep_time" parquet:"name=prep_time,type=DOUBLE"`
 }
 
 // ReviewEvent represents a review being generated
 type ReviewEvent struct {
 	BaseEvent
-	ReviewID          string  `json:"reviewId" parquet:"name=reviewId,type=BYTE_ARRAY,convertedtype=UTF8"`
-	OrderID           string  `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
-	CustomerID        string  `json:"customerId" parquet:"name=customerId,type=BYTE_ARRAY,convertedtype=UTF8"`
-	DeliveryPartnerID string  `json:"deliveryPartnerId" parquet:"name=deliveryPartnerId,type=BYTE_ARRAY,convertedtype=UTF8"`
-	FoodRating        float64 `json:"foodRating" parquet:"name=foodRating,type=DOUBLE"`
-	DeliveryRating    float64 `json:"deliveryRating" parquet:"name=deliveryRating,type=DOUBLE"`
-	OverallRating     float64 `json:"overallRating" parquet:"name=overallRating,type=DOUBLE"`
-	Comment           string  `json:"comment" parquet:"name=comment,type=BYTE_ARRAY,convertedtype=UTF8"`
-	CreatedAt         int64   `json:"createdAt" parquet:"name=createdAt,type=INT64"`
-	OrderTotal        float64 `json:"orderTotal" parquet:"name=orderTotal,type=DOUBLE"`
-	DeliveryTime      int64   `json:"deliveryTime" parquet:"name=deliveryTime,type=INT64"`
+	ReviewID          string    `json:"reviewId" parquet:"name=reviewId,type=BYTE_ARRAY,convertedtype=UTF8"`
+	OrderID           string    `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
+	CustomerID        string    `json:"customerId" parquet:"name=customerId,type=BYTE_ARRAY,convertedtype=UTF8"`
+	DeliveryPartnerID string    `json:"deliveryPartnerId" parquet:"name=deliveryPartnerId,type=BYTE_ARRAY,convertedtype=UTF8"`
+	FoodRating        float64   `json:"foodRating" parquet:"name=foodRating,type=DOUBLE"`
+	DeliveryRating    float64   `json:"deliveryRating" parquet:"name=deliveryRating,type=DOUBLE"`
+	OverallRating     float64   `json:"overallRating" parquet:"name=overallRating,type=DOUBLE"`
+	Comment           string    `json:"comment" parquet:"name=comment,type=BYTE_ARRAY,convertedtype=UTF8"`
+	CreatedAt         time.Time `json:"createdAt" parquet:"name=createdAt,type=INT64"`
+	OrderTotal        float64   `json:"orderTotal" parquet:"name=orderTotal,type=DOUBLE"`
+	DeliveryTime      int64     `json:"deliveryTime" parquet:"name=deliveryTime,type=INT64"`
 }
 
 func GetSchema(eventType string) (*schema.SchemaHandler, error) {

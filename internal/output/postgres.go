@@ -45,16 +45,45 @@ func (p *PostgresOutput) WriteMessage(topic string, msg []byte) error {
 	if err := json.Unmarshal(msg, &event); err != nil {
 		return err
 	}
+
 	table := topicToTable(topic)
-	if table == "fact_order" || table == "fact_user_behaviour" {
+
+	if table == "fact_order" {
+		if _, ok := event["delivery_address"]; ok {
+			if deliveryAddr, ok := event["delivery_address"].(map[string]interface{}); ok {
+				addressJSON, err := json.Marshal(deliveryAddr)
+				if err != nil {
+					return fmt.Errorf("failed to marshal delivery address: %w", err)
+				}
+				event["delivery_address"] = string(addressJSON)
+			} else {
+				event["delivery_address"] = "{}"
+			}
+		}
+		// remove id if it exists since fact_order uses event_id BIGSERIAL
+		delete(event, "id")
+	} else if table == "fact_restaurant_performance" {
+		restaurantID := ""
+		if rid, ok := event["restaurant_id"].(string); ok {
+			restaurantID = rid[:4]
+		}
+
+		now := time.Now().UTC()
+		nanos := now.UnixNano()
+
+		event["id"] = fmt.Sprintf("perf_%s_%s_%d_%s",
+			restaurantID,
+			now.Format("20060102150405"),
+			nanos%1000000, // add milliseconds
+			generateRandomSuffix())
+	} else if table == "fact_user_behaviour" {
 		// remove id if it exists since fact_order uses event_id BIGSERIAL
 		delete(event, "id")
 	} else {
-		id := fmt.Sprintf("%s_%s_%s",
+		event["id"] = fmt.Sprintf("%s_%s_%s",
 			topic[:4],
 			time.Now().UTC().Format("20060102150405"),
 			generateRandomSuffix())
-		event["id"] = id
 	}
 
 	if timestamp, ok := event["timestamp"].(float64); ok {
@@ -107,6 +136,9 @@ func (p *PostgresOutput) WriteMessage(topic string, msg []byte) error {
 
 	_, err := p.db.Exec(query, vals...)
 	if err != nil {
+		// log the query and values
+		log.Printf("DEBUG: Executed query: %s", query)
+		log.Printf("DEBUG: With values: %+v", vals)
 		return fmt.Errorf("failed to insert into %s: %w", table, err)
 	}
 
@@ -445,21 +477,39 @@ func (p *PostgresOutput) BatchInsertMenuItems(menuItems []*models.MenuItem) erro
 
 func (p *PostgresOutput) BatchInsertOrdersTx(tx *sql.Tx, orders []*models.Order) error {
 	stmt, err := tx.Prepare(pq.CopyIn(
-		"fact_order",
-		"id", "customer_id", "restaurant_id", "delivery_partner_id",
-		"total_amount", "delivery_cost", "order_placed_at",
-		"prep_start_time", "estimated_pickup_time", "estimated_delivery_time",
-		"pickup_time", "in_transit_time", "actual_delivery_time",
-		"status", "payment_method", "delivery_address", "review_generated",
+		"orders", // Changed from "fact_order" to "orders"
+		"id",
+		"customer_id",
+		"restaurant_id",
+		"delivery_partner_id",
+		"total_amount",
+		"delivery_cost",
+		"order_placed_at",
+		"prep_start_time",
+		"estimated_pickup_time",
+		"estimated_delivery_time",
+		"pickup_time",
+		"in_transit_time",
+		"actual_delivery_time",
+		"status",
+		"payment_method",
+		"delivery_address",
+		"review_generated",
 	))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to prepare statement: %w", err)
 	}
 	defer stmt.Close()
 
 	for _, order := range orders {
-		deliveryAddress := json.RawMessage(fmt.Sprintf(`{"lat":%f,"lon":%f}`,
-			order.Address.Latitude, order.Address.Longitude))
+		// Convert address to JSON
+		addressJSON, err := json.Marshal(map[string]interface{}{
+			"lat": order.Address.Latitude,
+			"lon": order.Address.Longitude,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to marshal address: %w", err)
+		}
 
 		_, err = stmt.Exec(
 			order.ID,
@@ -477,34 +527,52 @@ func (p *PostgresOutput) BatchInsertOrdersTx(tx *sql.Tx, orders []*models.Order)
 			nullableTime(order.ActualDeliveryTime),
 			order.Status,
 			order.PaymentMethod,
-			deliveryAddress,
+			string(addressJSON),
 			order.ReviewGenerated,
 		)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to exec statement for order %s: %w", order.ID, err)
 		}
 	}
 
-	return stmt.Close()
+	err = stmt.Close()
+	if err != nil {
+		return fmt.Errorf("failed to close statement: %w", err)
+	}
+
+	return nil
 }
 
 func (p *PostgresOutput) UpdateRestaurantOrderCountsTx(tx *sql.Tx, orders []*models.Order) error {
-	// Group orders by restaurant
+	// group orders by restaurant
 	restaurantOrders := make(map[string]int)
 	for _, order := range orders {
 		restaurantOrders[order.RestaurantID]++
 	}
 
-	// Update counts for each restaurant
+	// update counts and metrics for each restaurant
 	for restaurantID, count := range restaurantOrders {
-		_, err := tx.Exec(`
+
+		var currentRating float64
+		var currentTotalRatings float64
+		err := tx.QueryRow(`
+            SELECT rating, total_ratings 
+            FROM restaurants 
+            WHERE id = $1
+        `, restaurantID).Scan(&currentRating, &currentTotalRatings)
+		if err != nil {
+			return fmt.Errorf("failed to get restaurant data: %w", err)
+		}
+
+		// update the restaurant metrics
+		_, err = tx.Exec(`
             UPDATE restaurants 
-            SET total_orders = total_orders + $1,
+            SET total_ratings = total_ratings + $1,
                 updated_at = NOW()
             WHERE id = $2
         `, count, restaurantID)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to update restaurant metrics: %w", err)
 		}
 	}
 
@@ -913,17 +981,51 @@ func buildInsertComponents(event map[string]interface{}) (string, []interface{},
 			values = append(values, v.Format("2006-01-02 15:04:05"))
 		case float64:
 			if isTimestampField(key) {
-				values = append(values, time.Unix(int64(v), 0).Format("2006-01-02 15:04:05"))
+				t := time.Unix(int64(v), 0)
+				if t.Year() < 1 || t.Year() > 9999 {
+					log.Printf("WARNING: Invalid timestamp for field '%s': %v", key, v)
+					t = time.Now()
+				}
+				values = append(values, t.Format("2006-01-02 15:04:05"))
 			} else if isNumericField(key) {
 				values = append(values, fmt.Sprintf("%.2f", v))
+			} else {
+				values = append(values, v)
+			}
+		case int64:
+			if isTimestampField(key) {
+				t := time.Unix(v, 0)
+				if t.Year() < 1 || t.Year() > 9999 {
+					log.Printf("WARNING: Invalid timestamp for field '%s': %v", key, v)
+					t = time.Now()
+				}
+				values = append(values, t.Format("2006-01-02 15:04:05"))
 			} else {
 				values = append(values, v)
 			}
 		case models.Location:
 			point := fmt.Sprintf("ST_SetSRID(ST_MakePoint(%f, %f), 4326)", v.Lon, v.Lat)
 			values = append(values, point)
+		case string:
+			if key == "item_ids" {
+				values = append(values, pq.Array(v))
+			} else {
+				values = append(values, v)
+			}
 		case []string:
 			values = append(values, pq.Array(v))
+		case []interface{}:
+			if key == "item_ids" {
+				strArr := make([]string, len(v))
+				for i, item := range v {
+					if str, ok := item.(string); ok {
+						strArr[i] = str
+					}
+				}
+				values = append(values, pq.Array(strArr))
+			} else {
+				values = append(values, pq.Array(v))
+			}
 		case map[string]interface{}:
 			if isLocationMap(v) {
 				lat, lon := getLocationCoords(v)
@@ -932,9 +1034,10 @@ func buildInsertComponents(event map[string]interface{}) (string, []interface{},
 				jsonBytes, err := json.Marshal(v)
 				if err != nil {
 					log.Printf("Error marshaling JSON for key %s: %v", key, err)
-					continue
+					values = append(values, "{}")
+				} else {
+					values = append(values, string(jsonBytes))
 				}
-				values = append(values, string(jsonBytes))
 			}
 		default:
 			values = append(values, v)
@@ -986,12 +1089,17 @@ func isTimestampField(field string) bool {
 		"pickup_time":             true,
 		"in_transit_time":         true,
 		"actual_delivery_time":    true,
+		"updated_at":              true,
+		"join_date":               true,
+		"delivery_time":           true,
+		"cancellation_time":       true,
+		"ready_time":              true,
 	}
 	return timestampFields[field]
 }
 
 func generateRandomSuffix() string {
-	b := make([]byte, 3)
+	b := make([]byte, 6)
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
