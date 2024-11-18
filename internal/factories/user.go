@@ -35,7 +35,7 @@ func (uf *UserFactory) CreateUser(config *models.Config) *models.User {
 		},
 		Preferences:         generateRandomPreferences(),
 		DietaryRestrictions: generateRandomDietaryRestrictions(),
-		OrderFrequency:      fake.Float64(2, 0, 100) / 100 * config.OrderFrequency,
+		OrderFrequency:      fake.Float64(2, 50, 100) / 100 * config.OrderFrequency,
 	}
 }
 

@@ -48,7 +48,7 @@ func (p *PostgresOutput) WriteMessage(topic string, msg []byte) error {
 
 	table := topicToTable(topic)
 
-	if table == "fact_order" {
+	if table == "order_event" {
 		if _, ok := event["delivery_address"]; ok {
 			if deliveryAddr, ok := event["delivery_address"].(map[string]interface{}); ok {
 				addressJSON, err := json.Marshal(deliveryAddr)
@@ -62,35 +62,17 @@ func (p *PostgresOutput) WriteMessage(topic string, msg []byte) error {
 		}
 		// remove id if it exists since fact_order uses event_id BIGSERIAL
 		delete(event, "id")
-	} else if table == "fact_restaurant_performance" {
-		restaurantID := ""
-		if rid, ok := event["restaurant_id"].(string); ok {
-			restaurantID = rid[:4]
-		}
-
-		now := time.Now().UTC()
-		nanos := now.UnixNano()
-
-		event["id"] = fmt.Sprintf("perf_%s_%s_%d_%s",
-			restaurantID,
-			now.Format("20060102150405"),
-			nanos%1000000, // add milliseconds
-			generateRandomSuffix())
-	} else if table == "fact_user_behaviour" {
-		// remove id if it exists since fact_order uses event_id BIGSERIAL
-		delete(event, "id")
+	} else if table == "orders" {
+		delete(event, "event_type")
 	} else {
-		event["id"] = fmt.Sprintf("%s_%s_%s",
-			topic[:4],
-			time.Now().UTC().Format("20060102150405"),
-			generateRandomSuffix())
+		delete(event, "id")
 	}
 
 	if timestamp, ok := event["timestamp"].(float64); ok {
 		event["timestamp"] = time.Unix(int64(timestamp), 0).Format("2006-01-02 15:04:05")
 	}
 
-	if topic == "restaurant_status_events" {
+	if topic == "restaurant_event" {
 		if event["current_capacity"] == nil {
 			event["current_capacity"] = event["capacity"]
 		}
@@ -102,7 +84,7 @@ func (p *PostgresOutput) WriteMessage(topic string, msg []byte) error {
 		}
 	}
 
-	if topic == "partner_location_events" || topic == "delivery_status_check_events" {
+	if topic == "delivery_partner_event" {
 		if ts, ok := event["timestamp"].(float64); ok {
 			event["timestamp"] = time.Unix(int64(ts), 0).Format("2006-01-02 15:04:05")
 		}
@@ -883,73 +865,74 @@ func isRetryableError(err error) bool {
 
 func topicToTable(topic string) string {
 	tableMap := map[string]string{
-		// order related facts
-		"order_placed_events":       "fact_order",
-		"order_preparation_events":  "fact_order",
-		"order_ready_events":        "fact_order",
-		"order_pickup_events":       "fact_order",
-		"order_delivery_events":     "fact_order",
-		"order_cancellation_events": "fact_order",
-		"order_in_transit_events":   "fact_order",
+		// order related events
+		"order_placed_events":       "orders",
+		"order_preparation_events":  "order_event",
+		"order_ready_events":        "order_event",
+		"order_pickup_events":       "order_event",
+		"order_delivery_events":     "order_event",
+		"order_cancellation_events": "order_event",
+		"order_in_transit_events":   "order_event",
 
-		// delivery performance facts
-		"delivery_status_check_events":   "fact_delivery_performance",
-		"partner_location_events":        "fact_delivery_performance",
-		"delivery_partner_events":        "fact_delivery_performance",
-		"delivery_partner_status_events": "fact_partner_status",
-		"delivery_partner_shift_events":  "fact_partner_status",
+		// delivery performance events
+		"delivery_status_check_events":       "delivery_partner_event",
+		"partner_location_events":            "delivery_partner_event",
+		"delivery_partner_events":            "delivery_partner_event",
+		"delivery_partner_status_events":     "delivery_partner_event",
+		"delivery_partner_shift_events":      "delivery_partner_event",
+		"delivery_partner_assignment_events": "delivery_partner_event",
 
-		// restaurant performance facts
-		"restaurant_status_events":   "fact_restaurant_performance",
-		"restaurant_metrics_events":  "fact_restaurant_performance",
-		"restaurant_menu_events":     "fact_restaurant_changes",
-		"restaurant_capacity_events": "fact_restaurant_changes",
-		"restaurant_hours_events":    "fact_restaurant_changes",
+		// restaurant performance events
+		"restaurant_status_events":   "restaurant_event",
+		"restaurant_metrics_events":  "restaurant_event",
+		"restaurant_menu_events":     "restaurant_event",
+		"restaurant_capacity_events": "restaurant_event",
+		"restaurant_hours_events":    "restaurant_event",
 
-		// user/customer facts
-		"user_behaviour_events":  "fact_user_behaviour",
-		"user_preference_events": "fact_user_behaviour",
+		// user/customer events
+		"user_behaviour_events":  "customer_event",
+		"user_preference_events": "customer_event",
 
-		// review facts
-		"review_events": "fact_review",
+		// review events
+		"review_events": "review_event",
 
-		// time and location based facts
-		"traffic_condition_events": "fact_traffic_condition",
-		"weather_condition_events": "fact_weather_condition",
-		"peak_hour_events":         "fact_peak_hours",
-
-		// menu related facts
-		"menu_item_events":         "fact_menu_changes",
-		"menu_price_events":        "fact_menu_price",
-		"menu_availability_events": "fact_menu_availability",
-
-		// promotion and discount facts
-		"promotion_events": "fact_promotion",
-		"discount_events":  "fact_discount",
-
-		// payment facts
-		"payment_events": "fact_payment",
-		"refund_events":  "fact_refund",
-
-		// service metrics facts
-		"service_quality_events":       "fact_service_quality",
-		"delivery_time_events":         "fact_delivery_time",
-		"customer_satisfaction_events": "fact_customer_satisfaction",
-
-		// financial facts
-		"revenue_events":    "fact_revenue",
-		"cost_events":       "fact_cost",
-		"commission_events": "fact_commission",
-
-		// operational facts
-		"capacity_utilization_events": "fact_capacity_utilization",
-		"efficiency_metrics_events":   "fact_efficiency_metrics",
-		"performance_metrics_events":  "fact_performance_metrics",
-
-		// system facts
-		"notification_events":  "fact_notification",
-		"communication_events": "fact_communication",
-		"system_events":        "fact_system_log",
+		//// time and location based events
+		//"traffic_condition_events": "fact_traffic_condition",
+		//"weather_condition_events": "fact_weather_condition",
+		//"peak_hour_events":         "fact_peak_hours",
+		//
+		//// menu related facts
+		//"menu_item_events":         "fact_menu_changes",
+		//"menu_price_events":        "fact_menu_price",
+		//"menu_availability_events": "fact_menu_availability",
+		//
+		//// promotion and discount facts
+		//"promotion_events": "fact_promotion",
+		//"discount_events":  "fact_discount",
+		//
+		//// payment facts
+		//"payment_events": "fact_payment",
+		//"refund_events":  "fact_refund",
+		//
+		//// service metrics facts
+		//"service_quality_events":       "fact_service_quality",
+		//"delivery_time_events":         "fact_delivery_time",
+		//"customer_satisfaction_events": "fact_customer_satisfaction",
+		//
+		//// financial facts
+		//"revenue_events":    "fact_revenue",
+		//"cost_events":       "fact_cost",
+		//"commission_events": "fact_commission",
+		//
+		//// operational facts
+		//"capacity_utilization_events": "fact_capacity_utilization",
+		//"efficiency_metrics_events":   "fact_efficiency_metrics",
+		//"performance_metrics_events":  "fact_performance_metrics",
+		//
+		//// system facts
+		//"notification_events":  "fact_notification",
+		//"communication_events": "fact_communication",
+		//"system_events":        "fact_system_log",
 	}
 
 	if table, ok := tableMap[topic]; ok {

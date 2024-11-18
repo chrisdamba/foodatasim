@@ -270,57 +270,37 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 	switch event.Type {
 	case models.EventPlaceOrder:
 		user := event.Data.(*models.User)
-		baseEvent.UserID = user.ID
 		order, err := s.createAndAddOrder(user)
 		if err != nil {
 			return models.EventMessage{}, fmt.Errorf("failed to create order: %w", err)
 		}
-		baseEvent.RestaurantID = order.RestaurantID
-
-		pgOutput, err := output.NewPostgresOutput(&s.Config.Database)
-		if err != nil {
-			return models.EventMessage{}, fmt.Errorf("failed to create postgres output: %w", err)
-		}
-		defer pgOutput.Close()
-
-		tx, err := pgOutput.BeginTx()
-		if err != nil {
-			return models.EventMessage{}, fmt.Errorf("failed to begin transaction: %w", err)
-		}
-		defer tx.Rollback()
-
-		err = pgOutput.BatchInsertOrdersTx(tx, []*models.Order{order})
-		if err != nil {
-			return models.EventMessage{}, fmt.Errorf("failed to insert order: %w", err)
-		}
-
-		if err = tx.Commit(); err != nil {
-			return models.EventMessage{}, fmt.Errorf("failed to commit transaction: %w", err)
-		}
 
 		eventData = OrderPlacedEvent{
-			BaseEvent:       baseEvent,
-			OrderID:         order.ID,
-			ItemIDs:         order.Items,
-			TotalAmount:     order.TotalAmount,
-			Status:          order.Status,
-			OrderPlacedAt:   order.OrderPlacedAt,
-			DeliveryAddress: order.Address,
+			ID:                order.ID,
+			CustomerID:        user.ID,
+			RestaurantID:      order.RestaurantID,
+			DeliveryPartnerID: order.DeliveryPartnerID,
+			ItemIDs:           order.Items,
+			TotalAmount:       order.TotalAmount,
+			DeliveryCost:      order.DeliveryCost,
+			PaymentMethod:     order.PaymentMethod,
+			OrderPlacedAt:     order.OrderPlacedAt,
+			DeliveryAddress:   order.Address,
 		}
+
 		topic = "order_placed_events"
 
 	case models.EventPrepareOrder:
 		order := event.Data.(*models.Order)
 		eventData = map[string]interface{}{
-			"order_id":         order.ID,
-			"user_id":          order.CustomerID,
-			"restaurant_id":    order.RestaurantID,
-			"event_type":       event.Type,
-			"timestamp":        event.Time,
-			"total_amount":     order.TotalAmount,
-			"status":           order.Status,
-			"order_placed_at":  order.OrderPlacedAt,
-			"delivery_address": order.Address,
+			"order_id":        order.ID,
+			"user_id":         order.CustomerID,
+			"restaurant_id":   order.RestaurantID,
+			"event_type":      event.Type,
+			"timestamp":       event.Time,
+			"prep_start_time": order.PrepStartTime,
+			"total_amount":    order.TotalAmount,
+			"status":          order.Status,
 		}
 		topic = "order_preparation_events"
 
@@ -456,7 +436,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			BaseEvent:        baseEvent,
 			OrderID:          order.ID,
 			Status:           order.Status,
-			CancellationTime: s.CurrentTime.Unix(),
+			CancellationTime: s.CurrentTime,
 		}
 		topic = "order_cancellation_events"
 
@@ -467,14 +447,13 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			return models.EventMessage{}, fmt.Errorf("user not found: %s", update.UserID)
 		}
 
-		timestamp := event.Time.Unix()
+		timestamp := event.Time
 		eventType := event.Type
 		userId := update.UserID
 		orderFrequency := update.OrderFrequency
-		lastOrderTime := safeUnixTime(user.LastOrderTime)
 
-		userBehaviorEvent := UserBehaviourUpdateEvent{
-			Timestamp:      &timestamp,
+		userBehaviourEvent := UserBehaviourUpdateEvent{
+			Timestamp:      timestamp,
 			EventType:      &eventType,
 			UserID:         &userId,
 			OrderFrequency: &orderFrequency,
@@ -482,11 +461,10 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 
 		// only include LastOrderTime if it's not the zero value
 		if !user.LastOrderTime.IsZero() {
-			lastOrderTime = safeUnixTime(user.LastOrderTime)
-			userBehaviorEvent.LastOrderTime = &lastOrderTime
+			userBehaviourEvent.LastOrderTime = user.LastOrderTime
 		}
 
-		eventData = userBehaviorEvent
+		eventData = userBehaviourEvent
 		topic = "user_behaviour_events"
 
 	case models.EventUpdateRestaurantStatus:

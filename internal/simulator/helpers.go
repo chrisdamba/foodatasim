@@ -391,7 +391,7 @@ func (s *Simulator) generateOrders() {
 		defer pgOutput.Close()
 	}
 
-	// Collect orders in a batch
+	// collect orders in a batch
 	const batchSize = 1000
 	orderBatch := make([]*models.Order, 0, batchSize)
 
@@ -432,6 +432,7 @@ func (s *Simulator) createOrder(user *models.User) *models.Order {
 	items := s.selectMenuItems(restaurant, user)
 	totalAmount := s.calculateTotalAmount(items)
 	prepTime := s.estimatePrepTime(restaurant, items)
+	deliveryCost := s.calculateDeliveryFee(totalAmount)
 
 	order := &models.Order{
 		ID:            generateID(),
@@ -439,7 +440,7 @@ func (s *Simulator) createOrder(user *models.User) *models.Order {
 		RestaurantID:  restaurant.ID,
 		Items:         items,
 		TotalAmount:   totalAmount,
-		DeliveryCost:  s.calculateDeliveryFee(totalAmount),
+		DeliveryCost:  deliveryCost,
 		OrderPlacedAt: s.CurrentTime,
 		PrepStartTime: s.CurrentTime.Add(time.Minute * time.Duration(s.Rng.Intn(5))),
 		Status:        "placed",
@@ -610,10 +611,10 @@ func (s *Simulator) shouldPlaceOrder(user *models.User) bool {
 }
 
 func (s *Simulator) generateNextOrderTime(user *models.User) time.Time {
-	// Base time interval (in hours) derived from user's order frequency
+	// base time interval (in hours) derived from user's order frequency
 	baseInterval := 24.0 / user.OrderFrequency
 
-	// Adjust interval based on time of day
+	// adjust interval based on time of day
 	hourOfDay := float64(s.CurrentTime.Hour())
 	var timeOfDayFactor float64
 	switch {
@@ -629,7 +630,7 @@ func (s *Simulator) generateNextOrderTime(user *models.User) time.Time {
 		timeOfDayFactor = 1.0
 	}
 
-	// Adjust interval based on day of week
+	// adjust interval based on day of week
 	dayOfWeek := s.CurrentTime.Weekday()
 	var dayOfWeekFactor float64
 	if dayOfWeek == time.Saturday || dayOfWeek == time.Sunday {
@@ -638,20 +639,20 @@ func (s *Simulator) generateNextOrderTime(user *models.User) time.Time {
 		dayOfWeekFactor = 1.1
 	}
 
-	// Apply factors to base interval
+	// apply factors to base interval
 	adjustedInterval := baseInterval * timeOfDayFactor * dayOfWeekFactor
 
-	// Add some randomness (±20% of the adjusted interval)
+	// add some randomness (±20% of the adjusted interval)
 	randomFactor := 0.8 + (0.4 * s.Rng.Float64())
 	finalInterval := adjustedInterval * randomFactor
 
-	// Convert interval to duration
+	// convert interval to duration
 	duration := time.Duration(finalInterval * float64(time.Hour))
 
-	// Calculate next order time
+	// calculate next order time
 	nextOrderTime := s.CurrentTime.Add(duration)
 
-	// Ensure the next order time is not before the current time
+	// ensure the next order time is not before the current time
 	if nextOrderTime.Before(s.CurrentTime) {
 		nextOrderTime = s.CurrentTime.Add(15 * time.Minute)
 	}

@@ -19,13 +19,16 @@ type BaseEvent struct {
 
 // OrderPlacedEvent represents an order being placed
 type OrderPlacedEvent struct {
-	BaseEvent
-	OrderID         string         `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
-	ItemIDs         []string       `json:"itemIds" parquet:"name=itemIds,type=BYTE_ARRAY,convertedtype=UTF8"`
-	TotalAmount     float64        `json:"totalAmount" parquet:"name=totalAmount,type=DOUBLE"`
-	Status          string         `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
-	OrderPlacedAt   time.Time      `json:"orderPlacedAt" parquet:"name=orderPlacedAt,type=INT64"`
-	DeliveryAddress models.Address `json:"deliveryAddress" parquet:"name=newLocation,type=STRUCT"`
+	ID                string         `json:"id" parquet:"name=id,type=BYTE_ARRAY,convertedtype=UTF8"`
+	CustomerID        string         `json:"customerId,omitempty" parquet:"name=customerId,type=BYTE_ARRAY,convertedtype=UTF8"`
+	RestaurantID      string         `json:"restaurantId,omitempty" parquet:"name=restaurantId,type=BYTE_ARRAY,convertedtype=UTF8"`
+	DeliveryPartnerID string         `json:"deliveryPartnerId,omitempty" parquet:"name=deliveryPartnerId,type=BYTE_ARRAY,convertedtype=UTF8"`
+	ItemIDs           []string       `json:"itemIds" parquet:"name=itemIds,type=BYTE_ARRAY,convertedtype=UTF8"`
+	TotalAmount       float64        `json:"totalAmount" parquet:"name=totalAmount,type=DOUBLE"`
+	DeliveryCost      float64        `json:"deliveryCost" parquet:"name=deliveryCost,type=DOUBLE"`
+	PaymentMethod     string         `json:"paymentMethod"  parquet:"name=paymentMethod,type=BYTE_ARRAY,convertedtype=UTF8"`
+	OrderPlacedAt     time.Time      `json:"orderPlacedAt" parquet:"name=orderPlacedAt,type=INT64"`
+	DeliveryAddress   models.Address `json:"deliveryAddress" parquet:"name=newLocation,type=STRUCT"`
 }
 
 // OrderPreparationEvent represents an order being prepared
@@ -141,18 +144,18 @@ type OrderDeliveryEvent struct {
 // OrderCancellationEvent represents an order being cancelled
 type OrderCancellationEvent struct {
 	BaseEvent
-	OrderID          string `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
-	Status           string `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
-	CancellationTime int64  `json:"cancellationTime" parquet:"name=cancellationTime,type=INT64"`
+	OrderID          string    `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
+	Status           string    `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
+	CancellationTime time.Time `json:"cancellationTime" parquet:"name=cancellationTime,type=INT64"`
 }
 
 // UserBehaviourUpdateEvent represents an update to a user's behaviour
 type UserBehaviourUpdateEvent struct {
-	Timestamp      *int64   `json:"timestamp" parquet:"name=timestamp,type=INT64,repetitiontype=OPTIONAL"`
-	EventType      *string  `json:"eventType" parquet:"name=eventType,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
-	UserID         *string  `json:"userId" parquet:"name=userId,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
-	OrderFrequency *float64 `json:"orderFrequency" parquet:"name=orderFrequency,type=DOUBLE,repetitiontype=OPTIONAL"`
-	LastOrderTime  *int64   `json:"lastOrderTime,omitempty" parquet:"name=lastOrderTime,type=INT64,repetitiontype=OPTIONAL"`
+	Timestamp      time.Time `json:"timestamp" parquet:"name=timestamp,type=INT64,repetitiontype=OPTIONAL"`
+	EventType      *string   `json:"eventType" parquet:"name=eventType,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
+	UserID         *string   `json:"userId" parquet:"name=userId,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
+	OrderFrequency *float64  `json:"orderFrequency" parquet:"name=orderFrequency,type=DOUBLE,repetitiontype=OPTIONAL"`
+	LastOrderTime  time.Time `json:"lastOrderTime,omitempty" parquet:"name=lastOrderTime,type=INT64,repetitiontype=OPTIONAL"`
 }
 
 // RestaurantStatusUpdateEvent represents an update to a restaurant's status
