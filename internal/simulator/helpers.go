@@ -401,8 +401,10 @@ func (s *Simulator) addOrder(order models.Order) {
 func (s *Simulator) createOrder(user *models.User) *models.Order {
 	restaurant := s.selectRestaurant(user)
 	items := s.selectMenuItems(restaurant, user)
-	totalAmount := s.calculateTotalAmount(items)
 	prepTime := s.estimatePrepTime(restaurant, items)
+	totalAmount := s.calculateTotalAmount(items)
+	paymentMethod := s.generateRandomPaymentMethod(totalAmount)
+	deliveryFee := s.calculateDeliveryFee(totalAmount)
 
 	order := &models.Order{
 		ID:            generateID(),
@@ -410,9 +412,10 @@ func (s *Simulator) createOrder(user *models.User) *models.Order {
 		RestaurantID:  restaurant.ID,
 		Items:         items,
 		TotalAmount:   totalAmount,
+		DeliveryCost:  deliveryFee,
 		OrderPlacedAt: s.CurrentTime,
 		PrepStartTime: s.CurrentTime.Add(time.Minute * time.Duration(s.Rng.Intn(5))),
-		Status:        "placed",
+		PaymentMethod: paymentMethod,
 	}
 
 	order.PickupTime = order.PrepStartTime.Add(time.Minute * time.Duration(prepTime))
@@ -435,6 +438,7 @@ func (s *Simulator) createAndAddOrder(user *models.User) (*models.Order, error) 
 	// create a new order
 	order := s.createOrder(user)
 	order.RestaurantID = restaurant.ID
+	order.CustomerID = user.ID
 
 	// add the order to OrdersByUser
 	s.OrdersByUser[user.ID] = append(s.OrdersByUser[user.ID], *order)
@@ -725,6 +729,50 @@ func (s *Simulator) removeCompletedOrders() {
 		}
 	}
 	s.Orders = activeOrders
+}
+
+func (s *Simulator) generateRandomPaymentMethod(orderAmount float64) string {
+	// base weights
+	weights := map[string]float64{
+		"card":   0.5,
+		"cash":   0.3,
+		"wallet": 0.2,
+	}
+
+	// adjust weights based on order amount
+	if orderAmount > 100 {
+		// higher amounts are more likely to be paid by card
+		weights["card"] += 0.2
+		weights["cash"] -= 0.1
+		weights["wallet"] -= 0.1
+	} else if orderAmount < 20 {
+		// lower amounts more likely to be cash
+		weights["cash"] += 0.2
+		weights["card"] -= 0.1
+		weights["wallet"] -= 0.1
+	}
+
+	// normalise weights
+	total := 0.0
+	for _, weight := range weights {
+		total += weight
+	}
+	for method := range weights {
+		weights[method] /= total
+	}
+
+	// select payment method
+	randVal := s.Rng.Float64()
+	cumulativeWeight := 0.0
+
+	for method, weight := range weights {
+		cumulativeWeight += weight
+		if randVal <= cumulativeWeight {
+			return method
+		}
+	}
+
+	return "card" // default fallback
 }
 
 func (s *Simulator) assignDeliveryPartner(order *models.Order) {
@@ -1105,18 +1153,18 @@ func (s *Simulator) calculateTotalAmount(items []string) float64 {
 	for _, itemID := range items {
 		item := s.getMenuItem(itemID)
 		if item == nil {
-			continue // Skip if item not found
+			continue // skip if item not found
 		}
 
 		subtotal += item.Price
 
-		// Add to discountable total if the item is eligible for discounts
+		// add to discountable total if the item is eligible for discounts
 		if item.IsDiscountEligible {
 			discountableTotal += item.Price
 		}
 	}
 
-	// Calculate discount
+	// calculate discount
 	var discountAmount float64
 	if discountableTotal >= s.Config.MinOrderForDiscount {
 		discountAmount = discountableTotal * s.Config.DiscountPercentage
@@ -1125,19 +1173,19 @@ func (s *Simulator) calculateTotalAmount(items []string) float64 {
 		}
 	}
 
-	// Calculate tax
+	// calculate tax
 	taxAmount := subtotal * s.Config.TaxRate
 
-	// Calculate delivery fee (if applicable)
+	// calculate delivery fee (if applicable)
 	deliveryFee := s.calculateDeliveryFee(subtotal)
 
-	// Calculate service fee
+	// calculate service fee
 	serviceFee := subtotal * s.Config.ServiceFeePercentage
 
-	// Calculate total
+	// calculate total
 	total := subtotal + taxAmount + deliveryFee + serviceFee - discountAmount
 
-	// Round to two decimal places
+	// round to two decimal places
 	return math.Round(total*100) / 100
 }
 
@@ -1146,10 +1194,10 @@ func (s *Simulator) calculateDeliveryFee(subtotal float64) float64 {
 		return 0
 	}
 
-	// Base delivery fee
+	// base delivery fee
 	fee := s.Config.BaseDeliveryFee
 
-	// Additional fee for small orders
+	// additional fee for small orders
 	if subtotal < s.Config.SmallOrderThreshold {
 		fee += s.Config.SmallOrderFee
 	}

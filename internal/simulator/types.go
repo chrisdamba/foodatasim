@@ -8,6 +8,69 @@ import (
 	"time"
 )
 
+type UserCreatedEvent struct {
+	ID                  string          `json:"id"`
+	Name                string          `json:"name"`
+	Email               string          `json:"email"`
+	JoinDate            int64           `json:"joinDate"`
+	Location            models.Location `json:"location"`
+	Preferences         []string        `json:"preferences"`
+	DietaryRestrictions []string        `json:"dietRestrictions"`
+	OrderFrequency      float64         `json:"orderFrequency"`
+	LastOrderTime       int64           `json:"lastOrderTime"`
+}
+
+type RestaurantCreatedEvent struct {
+	ID               string          `json:"id"`
+	Host             string          `json:"host"`
+	Name             string          `json:"name"`
+	Currency         int             `json:"currency"`
+	Phone            string          `json:"phone"`
+	Town             string          `json:"town"`
+	SlugName         string          `json:"slugName"`
+	WebsiteLogoURL   string          `json:"websiteLogoUrl"`
+	Offline          string          `json:"offline"`
+	Location         models.Location `json:"location"`
+	Cuisines         []string        `json:"cuisines"`
+	Rating           float64         `json:"rating"`
+	TotalRatings     float64         `json:"totalRatings"`
+	PrepTime         float64         `json:"prepTime"`
+	MinPrepTime      float64         `json:"minPrepTime"`
+	AvgPrepTime      float64         `json:"avgPrepTime"` // Average preparation time in minutes
+	PickupEfficiency float64         `json:"pickupEfficiency"`
+	MenuItems        []string        `json:"menuItemIds"`
+	Capacity         int             `json:"capacity"`
+}
+
+type DeliveryPartnerCreatedEvent struct {
+	ID              string          `json:"id"`
+	Name            string          `json:"name"`
+	JoinDate        int64           `json:"joinDate"`
+	Rating          float64         `json:"rating"`
+	TotalRatings    float64         `json:"totalRatings"`
+	Experience      float64         `json:"experienceScore"` // Experience score
+	Speed           float64         `json:"speed"`
+	AvgSpeed        float64         `json:"avgSpeed"`
+	CurrentOrderID  string          `json:"currentOrderID"`
+	CurrentLocation models.Location `json:"currentLocation"`
+	Status          string          `json:"status"` // "available", "en_route_to_pickup", "en_route_to_delivery"
+}
+
+type MenuItemCreatedEvent struct {
+	ID                 string   `json:"id"`
+	RestaurantID       string   `json:"restaurantID"`
+	Name               string   `json:"name"`
+	Description        string   `json:"description"`
+	Price              float64  `json:"price"`
+	PrepTime           float64  `json:"prepTime"` // Preparation time in minutes
+	Category           string   `json:"category"`
+	Type               string   `json:"type"`       // e.g., "appetizer", "main course", "side dish", "dessert", "drink"
+	Popularity         float64  `json:"popularity"` // A score representing item popularity (e.g., 0.0 to 1.0)
+	PrepComplexity     float64  `json:"prepComplexity"`
+	Ingredients        []string `json:"ingredients"` // List of ingredients
+	IsDiscountEligible bool     `json:"isDiscountEligible"`
+}
+
 // BaseEvent is the common structure for all events
 type BaseEvent struct {
 	Timestamp    int64  `json:"timestamp" parquet:"name=timestamp,type=INT64"`
@@ -19,12 +82,17 @@ type BaseEvent struct {
 
 // OrderPlacedEvent represents an order being placed
 type OrderPlacedEvent struct {
-	BaseEvent
-	OrderID       string  `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
-	Items         string  `json:"itemIds" parquet:"name=itemIds,type=BYTE_ARRAY,convertedtype=UTF8"`
-	TotalAmount   float64 `json:"totalAmount" parquet:"name=totalAmount,type=DOUBLE"`
-	Status        string  `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=UTF8"`
-	OrderPlacedAt int64   `json:"orderPlacedAt" parquet:"name=orderPlacedAt,type=INT64"`
+	OrderID           string          `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
+	Items             []string        `json:"itemIds" parquet:"name=itemIds,type=BYTE_ARRAY,convertedtype=UTF8"`
+	TotalAmount       float64         `json:"totalAmount" parquet:"name=totalAmount,type=DOUBLE"`
+	OrderPlacedAt     int64           `json:"orderPlacedAt" parquet:"name=orderPlacedAt,type=INT64"`
+	CustomerID        string          `json:"customerId"`
+	RestaurantID      string          `json:"restaurantId"`
+	DeliveryPartnerID string          `json:"deliveryPartnerID"`
+	DeliveryCost      float64         `json:"deliveryCost"`
+	PaymentMethod     string          `json:"paymentMethod"` // e.g., "card", "cash", "wallet"
+	Address           models.Location `json:"deliveryAddress"`
+	ReviewGenerated   bool            `json:"reviewGenerated"`
 }
 
 // OrderPreparationEvent represents an order being prepared

@@ -28,6 +28,7 @@ func (uf *UserFactory) CreateUser(config *models.Config) *models.User {
 	return &models.User{
 		ID:       cuid.New(),
 		Name:     fake.Person().Name(),
+		Email:    fake.Internet().Email(),
 		JoinDate: fake.Time().TimeBetween(config.StartDate.AddDate(-1, 0, 0), config.StartDate),
 		Location: models.Location{
 			Lat: lat,

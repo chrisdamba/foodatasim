@@ -12,7 +12,6 @@ import (
 	"math"
 	"math/rand"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 )
@@ -52,21 +51,43 @@ func (s *Simulator) initializeData() {
 	restaurantFactory := &factories.RestaurantFactory{}
 	menuItemFactory := &factories.MenuItemFactory{}
 	deliveryPartnerFactory := &factories.DeliveryPartnerFactory{}
+	output := s.determineOutputDestination()
 
 	// initialise users
 	for i := 0; i < s.Config.InitialUsers; i++ {
-		s.Users[i] = userFactory.CreateUser(s.Config)
+		user := userFactory.CreateUser(s.Config)
+		s.Users[i] = user
+		event := UserCreatedEvent{
+			ID:    user.ID,
+			Name:  user.Name,
+			Email: user.Email,
+		}
+		msg, _ := json.Marshal(event)
+		if err := output.WriteMessage("user_created_events", msg); err != nil {
+			log.Printf("Failed to serialize user_created_events: %v", err)
+		}
 	}
 
 	// initialise restaurants
 	for i := 0; i < s.Config.InitialRestaurants; i++ {
 		restaurant := restaurantFactory.CreateRestaurant(s.Config)
 		s.Restaurants[restaurant.ID] = restaurant
+
+		msg, _ := json.Marshal(restaurant)
+		if err := output.WriteMessage("restaurant_created_events", msg); err != nil {
+			log.Printf("Failed to serialize restaurant_created_events: %v", err)
+		}
 	}
 
 	// initialise delivery partners
 	for i := 0; i < s.Config.InitialPartners; i++ {
-		s.DeliveryPartners[i] = deliveryPartnerFactory.CreateDeliveryPartner(s.Config)
+		partner := deliveryPartnerFactory.CreateDeliveryPartner(s.Config)
+		s.DeliveryPartners[i] = partner
+
+		msg, _ := json.Marshal(&partner)
+		if err := output.WriteMessage("delivery_partner_created_events", msg); err != nil {
+			log.Printf("Failed to serialize delivery_partner_created_events: %v", err)
+		}
 	}
 
 	// initialise menu items
@@ -77,6 +98,11 @@ func (s *Simulator) initializeData() {
 			menuItem := menuItemFactory.CreateMenuItem(restaurant, s.Config)
 			s.MenuItems[menuItem.ID] = &menuItem
 			s.Restaurants[restaurantID].MenuItems = append(s.Restaurants[restaurantID].MenuItems, menuItem.ID)
+
+			msg, _ := json.Marshal(&menuItem)
+			if err := output.WriteMessage("menu_item_created_events", msg); err != nil {
+				log.Printf("Failed to serialize menu_item_created_events: %v", err)
+			}
 		}
 	}
 
@@ -86,17 +112,6 @@ func (s *Simulator) initializeData() {
 	// initialise maps
 	s.OrdersByUser = make(map[string][]models.Order)
 	s.CompletedOrdersByRestaurant = make(map[string][]models.Order)
-
-	outputFolder := s.Config.OutputFolder
-	if outputFolder == "" {
-		outputFolder = "output" // Default to "output" if not specified
-	}
-	log.Printf("Cleaning and preparing output folder: %s", outputFolder)
-	if err := s.serializeInitialDataToCSV(outputFolder); err != nil {
-		log.Printf("Failed to serialize initial data to CSV: %v", err)
-	} else {
-		log.Printf("Initial data serialized to CSV in folder: %s", outputFolder)
-	}
 }
 
 func (s *Simulator) growUsers() {
@@ -192,21 +207,23 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 	switch event.Type {
 	case models.EventPlaceOrder:
 		user := event.Data.(*models.User)
-		baseEvent.UserID = user.ID
 		// create an order for this user
 		order, err := s.createAndAddOrder(user)
 		if err != nil {
 			return models.EventMessage{}, fmt.Errorf("failed to create order: %w", err)
 		}
-		baseEvent.RestaurantID = order.RestaurantID
-
 		eventData = OrderPlacedEvent{
-			BaseEvent:     baseEvent,
-			OrderID:       order.ID,
-			Items:         strings.Join(order.Items, ","),
-			TotalAmount:   order.TotalAmount,
-			Status:        order.Status,
-			OrderPlacedAt: order.OrderPlacedAt.Unix(),
+			OrderID:           order.ID,
+			Items:             order.Items,
+			TotalAmount:       order.TotalAmount,
+			OrderPlacedAt:     order.OrderPlacedAt.Unix(),
+			CustomerID:        order.CustomerID,
+			RestaurantID:      order.RestaurantID,
+			DeliveryPartnerID: order.DeliveryPartnerID,
+			DeliveryCost:      order.DeliveryCost,
+			PaymentMethod:     order.PaymentMethod,
+			Address:           user.Location,
+			ReviewGenerated:   order.ReviewGenerated,
 		}
 		topic = "order_placed_events"
 
