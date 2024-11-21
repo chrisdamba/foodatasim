@@ -1,7 +1,7 @@
 {
   "seed": 42,
-  "start_date": "2023-06-01T00:00:00Z",
-  "end_date": "2023-07-01T00:00:00Z",
+  "start_date": "2022-01-01T00:00:00Z",
+  "end_date": "2022-02-01T00:00:00Z",
   "initial_users": 10000,
   "initial_restaurants": 1000,
   "initial_partners": 300,
@@ -19,6 +19,15 @@
   "output_path": "output",
   "output_folder": "events",
   "continuous": true,
+  "clean_seed": true,
+  "database": {
+    "host": "localhost",
+    "port": "5434",
+    "user": "postgres",
+    "password": "supersecret",
+    "dbname": "foodatasim",
+    "sslmode": "disable"
+  },
   "cloud_storage": {
     "provider": "s3",
     "bucket_name": "foodsimdata",

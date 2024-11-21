@@ -29,6 +29,15 @@ type CloudStorageConfig struct {
 	Region        string `mapstructure:"region"`
 }
 
+type DatabaseConfig struct {
+	Host     string `mapstructure:"host"`
+	Port     string `mapstructure:"port"`
+	User     string `mapstructure:"user"`
+	Password string `mapstructure:"password"`
+	DBName   string `mapstructure:"dbname"`
+	SSLMode  string `mapstructure:"sslmode"`
+}
+
 type Config struct {
 	Seed               int                `mapstructure:"seed"`
 	StartDate          time.Time          `mapstructure:"start_date"`
@@ -50,6 +59,8 @@ type Config struct {
 	OutputFolder       string             `mapstructure:"output_folder"`
 	Continuous         bool               `mapstructure:"continuous"`
 	OutputDestination  string             `mapstructure:"output_destination"`
+	CleanSeed          bool               `mapstructure:"clean_seed"`
+	Database           DatabaseConfig     `mapstructure:"database"`
 	CloudStorage       CloudStorageConfig `mapstructure:"cloud_storage"`
 	// Additional fields
 	CityName              string        `mapstructure:"city_name"`
@@ -211,6 +222,11 @@ func (cfg *Config) LoadMenuDishData(filePath string) error {
 	}
 
 	return nil
+}
+
+func (dc *DatabaseConfig) GetConnectionString() string {
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		dc.User, dc.Password, dc.Host, dc.Port, dc.DBName, dc.SSLMode)
 }
 
 func validateCloudStorageConfig(config *Config) error {

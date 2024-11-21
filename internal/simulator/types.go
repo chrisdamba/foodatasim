@@ -17,7 +17,7 @@ type UserCreatedEvent struct {
 	Preferences         []string        `json:"preferences"`
 	DietaryRestrictions []string        `json:"dietRestrictions"`
 	OrderFrequency      float64         `json:"orderFrequency"`
-	LastOrderTime       int64           `json:"lastOrderTime"`
+	Timestamp           int64           `json:"timestamp" parquet:"name=timestamp,type=INT64"`
 }
 
 type RestaurantCreatedEvent struct {
@@ -40,10 +40,12 @@ type RestaurantCreatedEvent struct {
 	PickupEfficiency float64         `json:"pickupEfficiency"`
 	MenuItems        []string        `json:"menuItemIds"`
 	Capacity         int             `json:"capacity"`
+	Timestamp        int64           `json:"timestamp" parquet:"name=timestamp,type=INT64"`
 }
 
 type DeliveryPartnerCreatedEvent struct {
 	ID              string          `json:"id"`
+	Timestamp       int64           `json:"timestamp" parquet:"name=timestamp,type=INT64"`
 	Name            string          `json:"name"`
 	JoinDate        int64           `json:"joinDate"`
 	Rating          float64         `json:"rating"`
@@ -58,6 +60,7 @@ type DeliveryPartnerCreatedEvent struct {
 
 type MenuItemCreatedEvent struct {
 	ID                 string   `json:"id"`
+	Timestamp          int64    `json:"timestamp" parquet:"name=timestamp,type=INT64"`
 	RestaurantID       string   `json:"restaurantID"`
 	Name               string   `json:"name"`
 	Description        string   `json:"description"`
@@ -82,6 +85,7 @@ type BaseEvent struct {
 
 // OrderPlacedEvent represents an order being placed
 type OrderPlacedEvent struct {
+	Timestamp         int64           `json:"timestamp" parquet:"name=timestamp,type=INT64"`
 	OrderID           string          `json:"orderId" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=UTF8"`
 	Items             []string        `json:"itemIds" parquet:"name=itemIds,type=BYTE_ARRAY,convertedtype=UTF8"`
 	TotalAmount       float64         `json:"totalAmount" parquet:"name=totalAmount,type=DOUBLE"`

@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"github.com/chrisdamba/foodatasim/internal/models"
 	"github.com/chrisdamba/foodatasim/internal/simulator"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"os"
 	"time"
 
@@ -23,6 +25,15 @@ var rootCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
 			os.Exit(1)
 		}
+
+		// initialise database connection
+		dbPool, err := initializeDB(&cfg.Database)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error connecting to database: %v\n", err)
+			os.Exit(1)
+		}
+		defer dbPool.Close()
+
 		err = cfg.LoadReviewData("data/restaurant_reviews.tsv")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading review data: %v", err)
@@ -31,7 +42,7 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading menu dish data: %v", err)
 		}
-		sim := simulator.NewSimulator(cfg)
+		sim := simulator.NewSimulator(cfg, dbPool)
 		sim.Run()
 	},
 }
@@ -77,6 +88,41 @@ func initConfig() {
 	if err := viper.ReadInConfig(); err == nil {
 		fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
 	}
+}
+
+func initializeDB(dbConfig *models.DatabaseConfig) (*pgxpool.Pool, error) {
+	ctx := context.Background()
+
+	connStr := fmt.Sprintf(
+		"postgres://%s:%s@%s:%s/%s?sslmode=%s",
+		dbConfig.User,
+		dbConfig.Password,
+		dbConfig.Host,
+		dbConfig.Port,
+		dbConfig.DBName,
+		dbConfig.SSLMode,
+	)
+
+	poolConfig, err := pgxpool.ParseConfig(connStr)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing connection string: %v", err)
+	}
+
+	poolConfig.MaxConns = 50
+	poolConfig.MinConns = 10
+	poolConfig.MaxConnLifetime = time.Hour
+	poolConfig.MaxConnIdleTime = 30 * time.Minute
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		return nil, fmt.Errorf("error connecting to the database: %v", err)
+	}
+
+	if err := pool.Ping(ctx); err != nil {
+		return nil, fmt.Errorf("error pinging database: %v", err)
+	}
+
+	return pool, nil
 }
 
 func Execute() {

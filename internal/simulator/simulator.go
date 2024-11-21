@@ -1,10 +1,14 @@
 package simulator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/chrisdamba/foodatasim/internal/factories"
 	"github.com/chrisdamba/foodatasim/internal/models"
+	"github.com/chrisdamba/foodatasim/internal/repositories"
+	"github.com/chrisdamba/foodatasim/internal/repositories/postgres"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jaswdr/faker"
 	"github.com/schollz/progressbar/v3"
 	"io"
@@ -18,6 +22,10 @@ import (
 
 type Simulator struct {
 	Config                      *models.Config
+	UserRepo                    repositories.UserRepository
+	RestaurantRepo              repositories.RestaurantRepository
+	MenuItemRepo                repositories.MenuItemRepository
+	DeliveryPartnerRepo         repositories.DeliveryPartnerRepository
 	Users                       []*models.User
 	DeliveryPartners            []*models.DeliveryPartner
 	TrafficConditions           []models.TrafficCondition
@@ -32,78 +40,168 @@ type Simulator struct {
 	EventQueue                  *models.EventQueue
 }
 
-func NewSimulator(config *models.Config) *Simulator {
+func NewSimulator(config *models.Config, dbPool *pgxpool.Pool) *Simulator {
 	sim := &Simulator{
-		Config:           config,
-		CurrentTime:      config.StartDate,
-		Restaurants:      make(map[string]*models.Restaurant),
-		MenuItems:        make(map[string]*models.MenuItem),
-		Rng:              rand.New(rand.NewSource(time.Now().UnixNano())),
-		Users:            make([]*models.User, config.InitialUsers),
-		DeliveryPartners: make([]*models.DeliveryPartner, config.InitialPartners),
-		EventQueue:       models.NewEventQueue(),
+		Config:              config,
+		CurrentTime:         config.StartDate,
+		UserRepo:            postgres.NewUserRepository(dbPool),
+		RestaurantRepo:      postgres.NewRestaurantRepository(dbPool),
+		MenuItemRepo:        postgres.NewMenuItemRepository(dbPool),
+		DeliveryPartnerRepo: postgres.NewDeliveryPartnerRepository(dbPool),
+		Restaurants:         make(map[string]*models.Restaurant),
+		MenuItems:           make(map[string]*models.MenuItem),
+		Rng:                 rand.New(rand.NewSource(time.Now().UnixNano())),
+		Users:               make([]*models.User, config.InitialUsers),
+		DeliveryPartners:    make([]*models.DeliveryPartner, config.InitialPartners),
+		EventQueue:          models.NewEventQueue(),
 	}
 	return sim
 }
 
-func (s *Simulator) initializeData() {
-	userFactory := &factories.UserFactory{}
-	restaurantFactory := &factories.RestaurantFactory{}
-	menuItemFactory := &factories.MenuItemFactory{}
-	deliveryPartnerFactory := &factories.DeliveryPartnerFactory{}
-	output := s.determineOutputDestination()
+func (s *Simulator) initializeData(ctx context.Context) error {
+	if s.Config.CleanSeed {
+		if err := s.cleanAllData(ctx); err != nil {
+			return err
+		}
+	}
+
+	const batchSize = 1000
 
 	// initialise users
-	for i := 0; i < s.Config.InitialUsers; i++ {
-		user := userFactory.CreateUser(s.Config)
-		s.Users[i] = user
-		event := UserCreatedEvent{
-			ID:    user.ID,
-			Name:  user.Name,
-			Email: user.Email,
+	userCount, err := s.UserRepo.Count(ctx)
+	if err != nil {
+		return err
+	}
+
+	if userCount < s.Config.InitialUsers {
+		userFactory := &factories.UserFactory{}
+		usersToCreate := s.Config.InitialUsers - userCount
+
+		users := make([]*models.User, 0, usersToCreate)
+
+		for i := 0; i < usersToCreate; i++ {
+			user := userFactory.CreateUser(s.Config)
+			users = append(users, user)
 		}
-		msg, _ := json.Marshal(event)
-		if err := output.WriteMessage("user_created_events", msg); err != nil {
-			log.Printf("Failed to serialize user_created_events: %v", err)
+
+		for i := 0; i < len(users); i += batchSize {
+			end := i + batchSize
+			if end > len(users) {
+				end = len(users)
+			}
+
+			batch := users[i:end]
+			if err := s.UserRepo.BulkCreate(ctx, batch); err != nil {
+				return fmt.Errorf("failed to bulk create users: %w", err)
+			}
 		}
+
+		log.Printf("Created %d users in batches of %d", usersToCreate, batchSize)
+	}
+
+	s.Users, err = s.UserRepo.GetAll(ctx)
+	if err != nil {
+		return err
 	}
 
 	// initialise restaurants
-	for i := 0; i < s.Config.InitialRestaurants; i++ {
-		restaurant := restaurantFactory.CreateRestaurant(s.Config)
-		s.Restaurants[restaurant.ID] = restaurant
-
-		msg, _ := json.Marshal(restaurant)
-		if err := output.WriteMessage("restaurant_created_events", msg); err != nil {
-			log.Printf("Failed to serialize restaurant_created_events: %v", err)
-		}
+	restaurantCount, err := s.RestaurantRepo.Count(ctx)
+	if err != nil {
+		return err
 	}
 
-	// initialise delivery partners
-	for i := 0; i < s.Config.InitialPartners; i++ {
-		partner := deliveryPartnerFactory.CreateDeliveryPartner(s.Config)
-		s.DeliveryPartners[i] = partner
+	var newRestaurants []*models.Restaurant
+	if restaurantCount < s.Config.InitialRestaurants {
+		restaurantFactory := &factories.RestaurantFactory{}
+		restaurantsToCreate := s.Config.InitialRestaurants - restaurantCount
+		newRestaurants = make([]*models.Restaurant, 0, restaurantsToCreate)
 
-		msg, _ := json.Marshal(&partner)
-		if err := output.WriteMessage("delivery_partner_created_events", msg); err != nil {
-			log.Printf("Failed to serialize delivery_partner_created_events: %v", err)
+		for i := 0; i < restaurantsToCreate; i++ {
+			restaurant := restaurantFactory.CreateRestaurant(s.Config)
+			newRestaurants = append(newRestaurants, restaurant)
 		}
+
+		for i := 0; i < len(newRestaurants); i += batchSize {
+			end := i + batchSize
+			if end > len(newRestaurants) {
+				end = len(newRestaurants)
+			}
+			if err := s.RestaurantRepo.BulkCreate(ctx, newRestaurants[i:end]); err != nil {
+				return fmt.Errorf("failed to bulk create restaurants: %w", err)
+			}
+		}
+		log.Printf("Created %d restaurants in batches of %d", restaurantsToCreate, batchSize)
+	}
+
+	s.Restaurants, err = s.RestaurantRepo.GetAll(ctx)
+	if err != nil {
+		return err
 	}
 
 	// initialise menu items
 	fake := faker.New()
-	for restaurantID, restaurant := range s.Restaurants {
-		itemCount := fake.IntBetween(10, 30)
-		for i := 0; i < itemCount; i++ {
-			menuItem := menuItemFactory.CreateMenuItem(restaurant, s.Config)
-			s.MenuItems[menuItem.ID] = &menuItem
-			s.Restaurants[restaurantID].MenuItems = append(s.Restaurants[restaurantID].MenuItems, menuItem.ID)
+	menuItemCount, err := s.MenuItemRepo.Count(ctx)
+	if err != nil {
+		return err
+	}
 
-			msg, _ := json.Marshal(&menuItem)
-			if err := output.WriteMessage("menu_item_created_events", msg); err != nil {
-				log.Printf("Failed to serialize menu_item_created_events: %v", err)
+	if menuItemCount == 0 {
+		var menuItems []*models.MenuItem
+		menuItemFactory := &factories.MenuItemFactory{}
+
+		for _, restaurant := range s.Restaurants {
+			itemCount := fake.IntBetween(10, 30)
+			for i := 0; i < itemCount; i++ {
+				menuItem := menuItemFactory.CreateMenuItem(restaurant, s.Config)
+				menuItems = append(menuItems, &menuItem)
 			}
 		}
+
+		for i := 0; i < len(menuItems); i += batchSize {
+			end := i + batchSize
+			if end > len(menuItems) {
+				end = len(menuItems)
+			}
+			if err := s.MenuItemRepo.BulkCreate(ctx, menuItems[i:end]); err != nil {
+				return fmt.Errorf("failed to bulk create menu items: %w", err)
+			}
+		}
+	}
+
+	s.MenuItems, err = s.MenuItemRepo.GetAll(ctx)
+	if err != nil {
+		return err
+	}
+
+	// initialise delivery partners
+	partnerCount, err := s.DeliveryPartnerRepo.Count(ctx)
+	if err != nil {
+		return err
+	}
+
+	if partnerCount < s.Config.InitialPartners {
+		deliveryPartnerFactory := &factories.DeliveryPartnerFactory{}
+		partners := make([]*models.DeliveryPartner, 0, s.Config.InitialPartners-partnerCount)
+
+		for i := 0; i < s.Config.InitialPartners-partnerCount; i++ {
+			partner := deliveryPartnerFactory.CreateDeliveryPartner(s.Config)
+			partners = append(partners, partner)
+		}
+
+		for i := 0; i < len(partners); i += batchSize {
+			end := i + batchSize
+			if end > len(partners) {
+				end = len(partners)
+			}
+			if err := s.DeliveryPartnerRepo.BulkCreate(ctx, partners[i:end]); err != nil {
+				return fmt.Errorf("failed to bulk create delivery partners: %w", err)
+			}
+		}
+	}
+
+	s.DeliveryPartners, err = s.DeliveryPartnerRepo.GetAll(ctx)
+	if err != nil {
+		return err
 	}
 
 	// initialise traffic conditions
@@ -112,6 +210,24 @@ func (s *Simulator) initializeData() {
 	// initialise maps
 	s.OrdersByUser = make(map[string][]models.Order)
 	s.CompletedOrdersByRestaurant = make(map[string][]models.Order)
+
+	return nil
+}
+
+func (s *Simulator) cleanAllData(ctx context.Context) error {
+	if err := s.MenuItemRepo.DeleteAll(ctx); err != nil {
+		return err
+	}
+	if err := s.UserRepo.DeleteAll(ctx); err != nil {
+		return err
+	}
+	if err := s.RestaurantRepo.DeleteAll(ctx); err != nil {
+		return err
+	}
+	if err := s.DeliveryPartnerRepo.DeleteAll(ctx); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Simulator) growUsers() {
@@ -213,6 +329,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 			return models.EventMessage{}, fmt.Errorf("failed to create order: %w", err)
 		}
 		eventData = OrderPlacedEvent{
+			Timestamp:         event.Time.Unix(),
 			OrderID:           order.ID,
 			Items:             order.Items,
 			TotalAmount:       order.TotalAmount,
@@ -957,6 +1074,7 @@ func (s *Simulator) handleGenerateReview(order *models.Order) {
 
 func (s *Simulator) Run() {
 	output := s.determineOutputDestination()
+	ctx := context.Background()
 	defer func() {
 		if closer, ok := output.(io.Closer); ok {
 			err := closer.Close()
@@ -967,7 +1085,11 @@ func (s *Simulator) Run() {
 		}
 	}()
 
-	s.initializeData()
+	if err := s.initializeData(ctx); err != nil {
+		log.Printf("Error initialising data: %v", err)
+		return
+	}
+
 	log.Printf("Simulation starts from %s to %s\n", s.CurrentTime.Format(time.RFC3339), s.Config.EndDate.Format(time.RFC3339))
 
 	ticker := time.NewTicker(1 * time.Millisecond)

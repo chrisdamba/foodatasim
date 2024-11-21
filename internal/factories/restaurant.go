@@ -1,38 +1,41 @@
 package factories
 
 import (
+	"fmt"
 	"github.com/chrisdamba/foodatasim/internal/models"
 	"github.com/lucsky/cuid"
 	"math"
 	"math/rand"
+	"strings"
+	"sync"
 )
 
-type RestaurantFactory struct{}
+type RestaurantFactory struct {
+	slugCache sync.Map // to track used slugs
+}
 
 func (rf *RestaurantFactory) CreateRestaurant(config *models.Config) *models.Restaurant {
-	// calculate city bounds
-	latRange := config.UrbanRadius / 111.0 // Approx. conversion from km to degrees
+	latRange := config.UrbanRadius / 111.0
 	lonRange := latRange / math.Cos(config.CityLat*math.Pi/180.0)
 
-	// generate random offsets within the urban radius
 	latOffset := (rand.Float64()*2 - 1) * latRange
 	lonOffset := (rand.Float64()*2 - 1) * lonRange
 
-	// calculate final latitude and longitude
 	lat := config.CityLat + latOffset
 	lon := config.CityLon + lonOffset
 
-	// Use config for time-related fields
 	avgPrepTime := fake.Float64(0, config.MinPrepTime, config.MaxPrepTime)
+
+	name := fake.Company().Name()
 
 	return &models.Restaurant{
 		ID:             cuid.New(),
 		Host:           fake.Internet().Domain(),
-		Name:           fake.Company().Name(),
-		Currency:       1, // assuming 1 represents the default currency
+		Name:           name,
+		Currency:       1,
 		Phone:          fake.Phone().Number(),
 		Town:           fake.Address().City(),
-		SlugName:       fake.Internet().Slug(),
+		SlugName:       rf.createUniqueSlug(name),
 		WebsiteLogoURL: fake.Internet().URL(),
 		Offline:        "DISABLED",
 		Location: models.Location{
@@ -49,6 +52,27 @@ func (rf *RestaurantFactory) CreateRestaurant(config *models.Config) *models.Res
 		Capacity:         fake.IntBetween(10, 50),
 		MenuItems:        make([]string, 0),
 		CurrentOrders:    []models.Order{},
+	}
+}
+
+func (rf *RestaurantFactory) createUniqueSlug(name string) string {
+	base := strings.ToLower(strings.ReplaceAll(name, " ", "-"))
+	base = strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			return r
+		}
+		return -1
+	}, base)
+
+	slug := base
+	counter := 1
+
+	for {
+		if _, exists := rf.slugCache.LoadOrStore(slug, true); !exists {
+			return slug
+		}
+		slug = fmt.Sprintf("%s-%d", base, counter)
+		counter++
 	}
 }
 

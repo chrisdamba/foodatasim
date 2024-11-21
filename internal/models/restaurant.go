@@ -18,7 +18,7 @@ type Restaurant struct {
 	MinPrepTime      float64  `json:"min_prep_time"`
 	AvgPrepTime      float64  `json:"avg_prep_time"` // Average preparation time in minutes
 	PickupEfficiency float64  `json:"pickup_efficiency"`
-	MenuItems        []string `json:"menu_item_ids"`
+	MenuItems        []string `json:"menu_item_ids,omitempty"`
 	CurrentOrders    []Order  `json:"current_orders"`
 	Capacity         int      `json:"capacity"`
 }
