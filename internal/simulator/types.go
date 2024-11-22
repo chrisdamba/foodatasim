@@ -8,6 +8,206 @@ import (
 	"time"
 )
 
+// represents time-dependent growth patterns
+type GrowthPattern struct {
+	BaseRate        float64
+	SeasonalFactor  float64
+	EventMultiplier float64
+	DayOfWeekRates  map[time.Weekday]float64
+}
+
+// represents time-based ordering patterns
+type OrderPattern struct {
+	Type                  string
+	BaseProbability       float64
+	TimeMultipliers       map[int]float64 // Hour -> multiplier
+	WeekdayMultipliers    map[time.Weekday]float64
+	WeatherEffects        map[string]float64
+	MenuPreferences       map[string]float64 // MenuItem.Type -> preference multiplier
+	WeekdayPeakHours      []int
+	WeekendPeakHours      []int
+	WeekendMultiplier     float64
+	FridayNightMultiplier float64
+	// Holiday/special event multipliers
+	SpecialDates map[string]float64
+}
+
+// represents statistical parameters for various metrics
+type DistributionParams struct {
+	OrderAmount struct {
+		Mean float64
+		Std  float64
+		Min  float64
+		Max  float64
+	}
+	PreparationTime struct {
+		Mean float64
+		Std  float64
+		Min  float64
+		Max  float64
+	}
+	DeliveryTime struct {
+		Mean float64
+		Std  float64
+		Min  float64
+		Max  float64
+	}
+	Ratings struct {
+		Food     NormalDistribution
+		Delivery NormalDistribution
+	}
+}
+
+type NormalDistribution struct {
+	Mean float64
+	Std  float64
+	Min  float64
+	Max  float64
+}
+
+type MenuTimePattern struct {
+	ItemType          string
+	PeakHours         []int
+	SeasonalMonths    []time.Month
+	DayPartPreference map[string]float64 // "morning", "afternoon", "evening", "night"
+	WeatherPreference map[string]float64
+}
+
+type RestaurantPattern struct {
+	CuisineType      string
+	PeakHours        map[time.Weekday][]int
+	PrepTimeRange    TimeRange
+	PriceCategory    string
+	PopularityFactor float64
+	SeasonalItems    map[time.Month][]string
+}
+
+type TimeRange struct {
+	Min float64
+	Max float64
+	Std float64
+}
+
+type RestaurantCluster struct {
+	Type                string
+	BaseCapacity        int
+	CapacityFlexibility float64
+	QualityVariance     float64
+	PriceTier           int
+	PreparationSpeed    float64
+}
+
+type LocalEvent struct {
+	Type       string
+	Multiplier float64
+	StartTime  time.Time
+	EndTime    time.Time
+}
+
+type WeatherCondition struct {
+	Temperature   float64
+	Condition     string
+	WindSpeed     float64
+	Precipitation float64
+	Humidity      float64
+}
+
+type WeatherState struct {
+	Condition     string
+	Duration      time.Duration
+	StartTime     time.Time
+	Intensity     float64 // 0.0 to 1.0
+	Temperature   float64
+	WindSpeed     float64 // km/h
+	Humidity      float64 // 0.0 to 1.0
+	Precipitation float64 // mm/hour
+}
+
+type WeatherTransition struct {
+	Condition         string
+	BaseProbability   float64
+	SeasonalModifiers map[string]float64
+	TimeModifiers     map[string]float64
+	MinDuration       time.Duration
+	MaxDuration       time.Duration
+}
+
+type ReviewPattern struct {
+	UserSegment     string
+	OrderType       string
+	TimeOfDay       string
+	BaseProbability float64
+	RatingBias      RatingBias
+	CommentPatterns []CommentPattern
+}
+
+type RatingBias struct {
+	FoodBase         float64
+	DeliveryBase     float64
+	TimeInfluence    float64
+	PriceInfluence   float64
+	WeatherInfluence float64
+}
+
+type CommentPattern struct {
+	Sentiment string
+	Templates []string
+	Triggers  map[string]float64 // condition -> threshold
+}
+
+type ReviewMetrics struct {
+	totalReviews       int
+	averageRating      float64
+	ratingDistribution map[float64]int
+	reviewFrequency    map[string]int // frequency by date
+	commonPhrases      map[string]int
+	reviewTimes        []time.Time
+}
+
+type RatingWindow struct {
+	Duration   time.Duration
+	Weight     float64
+	MinReviews int
+}
+
+type TrendIndicator struct {
+	Direction float64 // -1 to 1
+	Strength  float64 // 0 to 1
+	Period    time.Duration
+}
+
+type RestaurantPopularityMetrics struct {
+	BasePopularity    float64
+	TrendFactor       float64
+	TimeBasedDemand   map[int]float64    // Hour -> demand multiplier
+	CustomerSegments  map[string]float64 // Segment -> preference multiplier
+	PriceAppeal       float64
+	QualityAppeal     float64
+	ConsistencyAppeal float64
+}
+
+type MarketPosition struct {
+	PriceTier      string
+	QualityTier    string
+	Popularity     float64
+	CompetitivePos float64
+}
+
+type DemandFactors struct {
+	TimeOfDay     float64
+	DayOfWeek     float64
+	Weather       float64
+	Seasonality   float64
+	SpecialEvents float64
+}
+
+type CompetitiveMetrics struct {
+	rating  float64
+	price   float64
+	volume  float64
+	variety float64
+}
+
 type UserCreatedEvent struct {
 	ID                  string          `json:"id"`
 	Name                string          `json:"name"`

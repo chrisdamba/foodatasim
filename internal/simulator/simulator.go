@@ -34,7 +34,9 @@ type Simulator struct {
 	OrdersByUser                map[string][]models.Order
 	CompletedOrdersByRestaurant map[string][]models.Order
 	Restaurants                 map[string]*models.Restaurant
+	RestaurantPerformanceCache  map[string]*models.RestaurantPerformanceCache
 	MenuItems                   map[string]*models.MenuItem
+	WeatherState                *WeatherState
 	CurrentTime                 time.Time
 	Rng                         *rand.Rand
 	EventQueue                  *models.EventQueue
@@ -42,18 +44,19 @@ type Simulator struct {
 
 func NewSimulator(config *models.Config, dbPool *pgxpool.Pool) *Simulator {
 	sim := &Simulator{
-		Config:              config,
-		CurrentTime:         config.StartDate,
-		UserRepo:            postgres.NewUserRepository(dbPool),
-		RestaurantRepo:      postgres.NewRestaurantRepository(dbPool),
-		MenuItemRepo:        postgres.NewMenuItemRepository(dbPool),
-		DeliveryPartnerRepo: postgres.NewDeliveryPartnerRepository(dbPool),
-		Restaurants:         make(map[string]*models.Restaurant),
-		MenuItems:           make(map[string]*models.MenuItem),
-		Rng:                 rand.New(rand.NewSource(time.Now().UnixNano())),
-		Users:               make([]*models.User, config.InitialUsers),
-		DeliveryPartners:    make([]*models.DeliveryPartner, config.InitialPartners),
-		EventQueue:          models.NewEventQueue(),
+		Config:                     config,
+		CurrentTime:                config.StartDate,
+		UserRepo:                   postgres.NewUserRepository(dbPool),
+		RestaurantRepo:             postgres.NewRestaurantRepository(dbPool),
+		MenuItemRepo:               postgres.NewMenuItemRepository(dbPool),
+		DeliveryPartnerRepo:        postgres.NewDeliveryPartnerRepository(dbPool),
+		Restaurants:                make(map[string]*models.Restaurant),
+		RestaurantPerformanceCache: make(map[string]*models.RestaurantPerformanceCache),
+		MenuItems:                  make(map[string]*models.MenuItem),
+		Rng:                        rand.New(rand.NewSource(time.Now().UnixNano())),
+		Users:                      make([]*models.User, config.InitialUsers),
+		DeliveryPartners:           make([]*models.DeliveryPartner, config.InitialPartners),
+		EventQueue:                 models.NewEventQueue(),
 	}
 	return sim
 }
@@ -138,6 +141,13 @@ func (s *Simulator) initializeData(ctx context.Context) error {
 		return err
 	}
 
+	// initialise MenuItems slice for each restaurant if not already initialised
+	for _, restaurant := range s.Restaurants {
+		if restaurant.MenuItems == nil {
+			restaurant.MenuItems = make([]string, 0)
+		}
+	}
+
 	// initialise menu items
 	fake := faker.New()
 	menuItemCount, err := s.MenuItemRepo.Count(ctx)
@@ -154,6 +164,7 @@ func (s *Simulator) initializeData(ctx context.Context) error {
 			for i := 0; i < itemCount; i++ {
 				menuItem := menuItemFactory.CreateMenuItem(restaurant, s.Config)
 				menuItems = append(menuItems, &menuItem)
+				s.Restaurants[restaurant.ID].MenuItems = append(s.Restaurants[restaurant.ID].MenuItems, menuItem.ID)
 			}
 		}
 
@@ -535,6 +546,7 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 
 	case models.EventGenerateReview:
 		order := event.Data.(*models.Order)
+
 		baseEvent.RestaurantID = order.RestaurantID
 		baseEvent.DeliveryID = order.DeliveryPartnerID
 		baseEvent.UserID = order.CustomerID
@@ -546,6 +558,10 @@ func (s *Simulator) serializeEvent(event models.Event) (models.EventMessage, err
 
 		// update ratings based on the review
 		s.updateRatings(review)
+
+		// update restaurant reputation
+		restaurant := s.getRestaurant(order.RestaurantID)
+		s.updateRestaurantReputation(restaurant, review)
 
 		eventData = ReviewEvent{
 			BaseEvent:         baseEvent,
@@ -697,10 +713,9 @@ func (s *Simulator) handlePrepareOrder(order *models.Order) {
 		Data: order,
 	})
 
-	// Optionally, update restaurant metrics
+	// optionally, update restaurant metrics
 	s.updateRestaurantMetrics(restaurant)
 
-	// Log the event
 	log.Printf("Order %s preparation started at %s, estimated ready time: %s",
 		order.ID, s.CurrentTime.Format(time.RFC3339), readyTime.Format(time.RFC3339))
 }
@@ -1054,19 +1069,19 @@ func (s *Simulator) handleUpdateUserBehaviour(update *models.UserBehaviourUpdate
 }
 
 func (s *Simulator) handleGenerateReview(order *models.Order) {
-	// Check if we should generate a review for this order
+	// check if we should generate a review for this order
 	if !s.shouldGenerateReview(order) {
 		return
 	}
 
-	// Enqueue the review generation event
+	// enqueue the review generation event
 	s.EventQueue.Enqueue(&models.Event{
 		Time: s.CurrentTime,
 		Type: models.EventGenerateReview,
 		Data: order,
 	})
 
-	// Set the ReviewGenerated flag to true
+	// set the ReviewGenerated flag to true
 	order.ReviewGenerated = true
 
 	log.Printf("Review generation for order %s scheduled. %.1f", order.ID)

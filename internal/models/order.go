@@ -22,3 +22,16 @@ type Order struct {
 	Address               Address   `json:"delivery_address"`
 	ReviewGenerated       bool      `json:"review_generated"`
 }
+
+type OrderMetrics struct {
+	TotalOrders     int
+	TotalRevenue    float64
+	AvgOrderValue   float64
+	AvgPrepTime     float64
+	AvgDeliveryTime float64
+	PeakHours       map[int]int    // Hour -> Order Count
+	PopularItems    map[string]int // ItemID -> Order Count
+	CompletionRate  float64
+	LateDeliveries  int
+	EarlyDeliveries int
+}

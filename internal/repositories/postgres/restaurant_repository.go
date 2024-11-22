@@ -63,7 +63,7 @@ func (r *RestaurantRepository) BulkCreate(ctx context.Context, restaurants []*mo
 }
 
 func (r *RestaurantRepository) GetAll(ctx context.Context) (map[string]*models.Restaurant, error) {
-	// First get all restaurants
+	// first get all restaurants
 	query := `
         SELECT 
             id, host, name, currency, phone, town, slug_name, website_logo_url,
@@ -110,7 +110,7 @@ func (r *RestaurantRepository) GetAll(ctx context.Context) (map[string]*models.R
 		restaurants[restaurant.ID] = restaurant
 	}
 
-	// Then get menu items for all restaurants
+	// then get menu items for all restaurants
 	menuQuery := `SELECT * FROM menu_items`
 	menuRows, err := r.pool.Query(ctx, menuQuery)
 	if err != nil {
