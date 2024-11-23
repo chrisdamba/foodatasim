@@ -13,106 +13,6 @@ var fake = faker.New()
 
 type UserFactory struct{}
 
-func (uf *UserFactory) assignUserSegment() string {
-	r := rand.Float64()
-
-	if r < models.DefaultCustomerSegments["frequent"].Ratio {
-		return "frequent"
-	} else if r < models.DefaultCustomerSegments["frequent"].Ratio+models.DefaultCustomerSegments["regular"].Ratio {
-		return "regular"
-	}
-	return "occasional"
-}
-
-func (uf *UserFactory) createUserBehaviorProfile(segment string) models.UserBehaviourProfile {
-	profile := models.UserBehaviourProfile{
-		OrderTimingPreference: make(map[time.Weekday][]int),
-		CuisineWeights:        make(map[string]float64),
-		PaymentPreferences: map[string]float64{
-			"card":   0.6,
-			"cash":   0.3,
-			"wallet": 0.1,
-		},
-	}
-
-	switch segment {
-	case "frequent":
-		profile.PriceThresholds.Min = 15
-		profile.PriceThresholds.Max = 80
-		profile.PriceThresholds.Target = 50
-		profile.OrderSizePreference = struct {
-			Min     int `json:"min"`
-			Max     int `json:"max"`
-			Typical int `json:"typical"`
-		}(struct {
-			Min     int
-			Max     int
-			Typical int
-		}{2, 5, 3})
-		profile.LocationPreference.MaxDistance = 5.0
-
-		// more varied timing preferences
-		for day := time.Sunday; day <= time.Saturday; day++ {
-			profile.OrderTimingPreference[day] = []int{12, 13, 19, 20, 21}
-		}
-		// additional late night preference for weekends
-		profile.OrderTimingPreference[time.Friday] = append(
-			profile.OrderTimingPreference[time.Friday],
-			[]int{22, 23}...,
-		)
-		profile.OrderTimingPreference[time.Saturday] = append(
-			profile.OrderTimingPreference[time.Saturday],
-			[]int{22, 23}...,
-		)
-
-	case "regular":
-		profile.PriceThresholds.Min = 10
-		profile.PriceThresholds.Max = 50
-		profile.PriceThresholds.Target = 35
-		profile.OrderSizePreference = struct {
-			Min     int `json:"min"`
-			Max     int `json:"max"`
-			Typical int `json:"typical"`
-		}(struct {
-			Min     int
-			Max     int
-			Typical int
-		}{1, 4, 2})
-		profile.LocationPreference.MaxDistance = 3.0
-
-		// standard timing preferences
-		for day := time.Sunday; day <= time.Saturday; day++ {
-			if day >= time.Monday && day <= time.Friday {
-				profile.OrderTimingPreference[day] = []int{12, 13, 19, 20}
-			} else {
-				profile.OrderTimingPreference[day] = []int{13, 14, 19, 20, 21}
-			}
-		}
-
-	case "occasional":
-		profile.PriceThresholds.Min = 8
-		profile.PriceThresholds.Max = 30
-		profile.PriceThresholds.Target = 20
-		profile.OrderSizePreference = struct {
-			Min     int `json:"min"`
-			Max     int `json:"max"`
-			Typical int `json:"typical"`
-		}(struct {
-			Min     int
-			Max     int
-			Typical int
-		}{1, 3, 1})
-		profile.LocationPreference.MaxDistance = 2.0
-
-		// limited timing preferences
-		for day := time.Sunday; day <= time.Saturday; day++ {
-			profile.OrderTimingPreference[day] = []int{12, 19}
-		}
-	}
-
-	return profile
-}
-
 func (uf *UserFactory) CreateUser(config *models.Config) *models.User {
 	// calculate city bounds
 	latRange := config.UrbanRadius / 111.0 // Approx. conversion from km to degrees
@@ -291,6 +191,106 @@ func (uf *UserFactory) calculateInitialOrderFrequency(segment string, config *mo
 	randomFactor := 0.8 + (rand.Float64() * 0.4) // ±20%
 
 	return baseFrequency * randomFactor * config.OrderFrequency
+}
+
+func (uf *UserFactory) assignUserSegment() string {
+	r := rand.Float64()
+
+	if r < models.DefaultCustomerSegments["frequent"].Ratio {
+		return "frequent"
+	} else if r < models.DefaultCustomerSegments["frequent"].Ratio+models.DefaultCustomerSegments["regular"].Ratio {
+		return "regular"
+	}
+	return "occasional"
+}
+
+func (uf *UserFactory) createUserBehaviorProfile(segment string) models.UserBehaviourProfile {
+	profile := models.UserBehaviourProfile{
+		OrderTimingPreference: make(map[time.Weekday][]int),
+		CuisineWeights:        make(map[string]float64),
+		PaymentPreferences: map[string]float64{
+			"card":   0.6,
+			"cash":   0.3,
+			"wallet": 0.1,
+		},
+	}
+
+	switch segment {
+	case "frequent":
+		profile.PriceThresholds.Min = 15
+		profile.PriceThresholds.Max = 80
+		profile.PriceThresholds.Target = 50
+		profile.OrderSizePreference = struct {
+			Min     int `json:"min"`
+			Max     int `json:"max"`
+			Typical int `json:"typical"`
+		}(struct {
+			Min     int
+			Max     int
+			Typical int
+		}{2, 5, 3})
+		profile.LocationPreference.MaxDistance = 5.0
+
+		// more varied timing preferences
+		for day := time.Sunday; day <= time.Saturday; day++ {
+			profile.OrderTimingPreference[day] = []int{12, 13, 19, 20, 21}
+		}
+		// additional late night preference for weekends
+		profile.OrderTimingPreference[time.Friday] = append(
+			profile.OrderTimingPreference[time.Friday],
+			[]int{22, 23}...,
+		)
+		profile.OrderTimingPreference[time.Saturday] = append(
+			profile.OrderTimingPreference[time.Saturday],
+			[]int{22, 23}...,
+		)
+
+	case "regular":
+		profile.PriceThresholds.Min = 10
+		profile.PriceThresholds.Max = 50
+		profile.PriceThresholds.Target = 35
+		profile.OrderSizePreference = struct {
+			Min     int `json:"min"`
+			Max     int `json:"max"`
+			Typical int `json:"typical"`
+		}(struct {
+			Min     int
+			Max     int
+			Typical int
+		}{1, 4, 2})
+		profile.LocationPreference.MaxDistance = 3.0
+
+		// standard timing preferences
+		for day := time.Sunday; day <= time.Saturday; day++ {
+			if day >= time.Monday && day <= time.Friday {
+				profile.OrderTimingPreference[day] = []int{12, 13, 19, 20}
+			} else {
+				profile.OrderTimingPreference[day] = []int{13, 14, 19, 20, 21}
+			}
+		}
+
+	case "occasional":
+		profile.PriceThresholds.Min = 8
+		profile.PriceThresholds.Max = 30
+		profile.PriceThresholds.Target = 20
+		profile.OrderSizePreference = struct {
+			Min     int `json:"min"`
+			Max     int `json:"max"`
+			Typical int `json:"typical"`
+		}(struct {
+			Min     int
+			Max     int
+			Typical int
+		}{1, 3, 1})
+		profile.LocationPreference.MaxDistance = 2.0
+
+		// limited timing preferences
+		for day := time.Sunday; day <= time.Saturday; day++ {
+			profile.OrderTimingPreference[day] = []int{12, 19}
+		}
+	}
+
+	return profile
 }
 
 func generateRandomDietaryRestrictions() []string {

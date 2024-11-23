@@ -2,6 +2,7 @@ package simulator
 
 import (
 	"fmt"
+	"github.com/chrisdamba/foodatasim/internal/factories"
 	"github.com/chrisdamba/foodatasim/internal/models"
 	"github.com/jaswdr/faker"
 	"github.com/lucsky/cuid"
@@ -92,7 +93,7 @@ func (s *Simulator) shouldGenerateReview(order *models.Order) bool {
 	baseProbability = math.Max(0, math.Min(1, baseProbability))
 
 	// Generate a random number and compare with the calculated probability
-	return s.Rng.Float64() < baseProbability
+	return s.safeFloat64() < baseProbability
 }
 
 func (s *Simulator) createReview(order *models.Order) models.Review {
@@ -131,6 +132,84 @@ func (s *Simulator) createReview(order *models.Order) models.Review {
 	}
 }
 
+func (s *Simulator) calculateGrowthRate(baseRate float64, currentTime time.Time) float64 {
+	dayOfYear := float64(currentTime.YearDay())
+	seasonalFactor := math.Sin(2 * math.Pi * dayOfYear / 365.0)
+
+	// higher growth during summer months (assuming Northern hemisphere)
+	if currentTime.Month() >= time.June && currentTime.Month() <= time.August {
+		seasonalFactor *= 1.5
+	}
+
+	// weekend boost
+	if currentTime.Weekday() == time.Friday || currentTime.Weekday() == time.Saturday {
+		seasonalFactor *= 1.2
+	}
+
+	return baseRate + (seasonalFactor * 0.05) // 5% seasonal variation
+}
+
+func (s *Simulator) growUsers() {
+	// check if user growth rate is specified
+	if s.Config.UserGrowthRate == 0 {
+		return // No growth if rate is not specified
+	}
+
+	// calculate daily growth rate
+	dailyGrowthRate := math.Pow(1+s.Config.UserGrowthRate, 1.0/365.0) - 1
+
+	// calculate the number of days since the start of the simulation
+	daysSinceStart := s.CurrentTime.Sub(s.Config.StartDate).Hours() / 24
+
+	// calculate the expected number of users at this point in the simulation
+	expectedUsers := float64(s.Config.InitialUsers) * math.Pow(1+dailyGrowthRate, daysSinceStart)
+
+	// calculate how many new users to add
+	newUsersToAdd := int(expectedUsers) - len(s.Users)
+
+	if newUsersToAdd > 0 {
+		userFactory := &factories.UserFactory{}
+		for i := 0; i < newUsersToAdd; i++ {
+			newUser := userFactory.CreateUser(s.Config)
+			s.Users = append(s.Users, newUser)
+
+			// schedule the first order for this new user
+			nextOrderTime := s.generateNextOrderTime(newUser)
+			s.EventQueue.Enqueue(&models.Event{
+				Time: nextOrderTime,
+				Type: models.EventPlaceOrder,
+				Data: newUser,
+			})
+		}
+		log.Printf("Added %d new users. Total users: %d", newUsersToAdd, len(s.Users))
+	}
+}
+
+func (s *Simulator) updatePopulationWithGrowth(growthRate float64) {
+	// calculate expected new users
+	currentUsers := float64(len(s.Users))
+	expectedGrowth := currentUsers * growthRate
+
+	// add new users (rounded to nearest integer)
+	newUsersCount := int(math.Round(expectedGrowth))
+	if newUsersCount > 0 {
+		userFactory := &factories.UserFactory{}
+		for i := 0; i < newUsersCount; i++ {
+			newUser := userFactory.CreateUser(s.Config)
+			s.Users = append(s.Users, newUser)
+
+			// Schedule first order for new user
+			nextOrderTime := s.generateNextOrderTime(newUser)
+			s.EventQueue.Enqueue(&models.Event{
+				Time: nextOrderTime,
+				Type: models.EventPlaceOrder,
+				Data: newUser,
+			})
+		}
+		log.Printf("Added %d new users based on growth rate of %.2f%%", newUsersCount, growthRate*100)
+	}
+}
+
 func (s *Simulator) updateRatings(review models.Review) {
 	// update restaurant rating
 	restaurant := s.getRestaurant(review.RestaurantID)
@@ -163,7 +242,7 @@ func (s *Simulator) calculateFoodRating(order *models.Order, bias RatingBias) fl
 	finalRating := baseRating + priceImpact + historicalImpact + complexityImpact
 
 	// add some randomness (±0.5)
-	randomFactor := (s.Rng.Float64() - 0.5)
+	randomFactor := s.safeFloat64() - 0.5
 
 	return math.Max(1, math.Min(5, finalRating+randomFactor))
 }
@@ -391,6 +470,9 @@ func (s *Simulator) selectRestaurantByScore(
 	restaurants []*models.Restaurant,
 	scores map[string]float64,
 ) *models.Restaurant {
+	if len(restaurants) == 0 {
+		return nil
+	}
 	// calculate total score
 	totalScore := 0.0
 	for _, score := range scores {
@@ -398,7 +480,7 @@ func (s *Simulator) selectRestaurantByScore(
 	}
 
 	// select probabilistically
-	r := s.Rng.Float64() * totalScore
+	r := s.safeFloat64() * totalScore
 	currentSum := 0.0
 
 	for _, restaurant := range restaurants {
@@ -462,7 +544,7 @@ func (s *Simulator) calculateOverallRating(foodRating, deliveryRating float64, o
 	weightedRating := (foodRating * foodWeight) + (deliveryRating * deliveryWeight)
 
 	// add slight randomness
-	randomFactor := (s.Rng.Float64()*0.2 - 0.1) // ±0.1
+	randomFactor := s.safeFloat64()*0.2 - 0.1 // ±0.1
 
 	return math.Max(1, math.Min(5, weightedRating+randomFactor))
 }
@@ -504,7 +586,7 @@ func (s *Simulator) generateReviewComment(order *models.Order, pattern ReviewPat
 
 	// add base comment from templates
 	if len(selectedPattern.Templates) > 0 {
-		baseComment := selectedPattern.Templates[s.Rng.Intn(len(selectedPattern.Templates))]
+		baseComment := selectedPattern.Templates[s.safeIntn(len(selectedPattern.Templates))]
 		comments = append(comments, baseComment)
 	}
 
@@ -544,7 +626,7 @@ func (s *Simulator) calculateDeliveryRating(order *models.Order) float64 {
 	adjustedRating := baseRating * clusterWeight * timeWeight * weatherWeight
 
 	// add some randomness (±0.5 stars)
-	finalRating := adjustedRating + (s.Rng.Float64() - 0.5)
+	finalRating := adjustedRating + (s.safeFloat64() - 0.5)
 
 	// ensure rating is between 1 and 5
 	return math.Max(1, math.Min(5, finalRating))
@@ -577,7 +659,7 @@ func (s *Simulator) adjustCommentWithDeliveryFeedback(originalComment string, de
 	}
 
 	// randomly decide whether to prepend or append the delivery comment
-	if s.Rng.Float64() < 0.5 {
+	if s.safeFloat64() < 0.5 {
 		return deliveryComment + originalComment
 	} else {
 		return originalComment + " " + deliveryComment
@@ -619,7 +701,7 @@ func (s *Simulator) getRandomRestaurant() *models.Restaurant {
 	for _, r := range s.Restaurants {
 		restaurants = append(restaurants, r)
 	}
-	return restaurants[s.Rng.Intn(len(restaurants))]
+	return restaurants[s.safeIntn(len(restaurants))]
 }
 
 func (s *Simulator) selectRestaurant(user *models.User) *models.Restaurant {
@@ -668,7 +750,7 @@ func (s *Simulator) selectRestaurant(user *models.User) *models.Restaurant {
 		totalScore += sr.score
 	}
 
-	randomValue := s.Rng.Float64() * totalScore
+	randomValue := s.safeFloat64() * totalScore
 	currentSum := 0.0
 
 	for _, sr := range scoredRestaurants {
@@ -966,7 +1048,7 @@ func (s *Simulator) updateTrafficConditions() {
 
 func (s *Simulator) generateTrafficDensity(t time.Time) float64 {
 	baseTraffic := 0.5 + 0.5*math.Sin(float64(t.Hour())/24*2*math.Pi)
-	randomFactor := 1 + (s.Rng.Float64()-0.5)*s.Config.TrafficVariability
+	randomFactor := 1 + (s.safeFloat64()-0.5)*s.Config.TrafficVariability
 	return baseTraffic * randomFactor
 }
 
@@ -998,6 +1080,53 @@ func (s *Simulator) generateOrders() {
 	}
 }
 
+func (s *Simulator) generateOrdersWithProbability() {
+	for _, user := range s.Users {
+		// get user's segment
+		segment := models.DefaultCustomerSegments[user.Segment]
+
+		// calculate order probability based on segment and current time
+		orderProbability := s.calculateOrderProbability(s.CurrentTime, segment)
+
+		// adjust probability based on user's personal frequency
+		orderProbability *= user.OrderFrequency / segment.OrdersPerMonth
+
+		// determine if order should be placed
+		if s.safeFloat64() < orderProbability {
+			// create and process order
+			order := s.createOrder(user)
+			s.assignDeliveryPartner(order)
+			s.Orders = append(s.Orders, *order)
+
+			// select restaurant using reputation-based system
+			nearbyRestaurants := s.getNearbyRestaurants(user.Location, 5.0)
+			restaurant := s.updateOrderGeneration(user, nearbyRestaurants)
+			if restaurant == nil {
+				continue
+			}
+			s.updateRestaurantMetrics(restaurant)
+
+			// update user's last order time
+			user.LastOrderTime = s.CurrentTime
+
+			// schedule next order
+			nextOrderTime := s.generateNextOrderTime(user)
+			s.EventQueue.Enqueue(&models.Event{
+				Time: nextOrderTime,
+				Type: models.EventPlaceOrder,
+				Data: user,
+			})
+
+			// add event for order placement
+			s.EventQueue.Enqueue(&models.Event{
+				Time: s.CurrentTime,
+				Type: models.EventPlaceOrder,
+				Data: user,
+			})
+		}
+	}
+}
+
 func (s *Simulator) addOrder(order models.Order) {
 	s.Orders = append(s.Orders, order)
 	s.OrdersByUser[order.CustomerID] = append(s.OrdersByUser[order.CustomerID], order)
@@ -1014,7 +1143,7 @@ func (s *Simulator) createOrder(user *models.User) *models.Order {
 	baseAmount := s.calculateTotalAmount(items)
 
 	// adjust amount based on segment patterns
-	adjustedAmount := baseAmount * (1 + (s.Rng.Float64()*0.2 - 0.1)) // ±10% variation
+	adjustedAmount := baseAmount * (1 + (s.safeFloat64()*0.2 - 0.1)) // ±10% variation
 	if segment.AvgSpend > 0 {
 		// tendency towards segment's average spend
 		adjustedAmount = (adjustedAmount + segment.AvgSpend) / 2
@@ -1209,7 +1338,7 @@ func (s *Simulator) shouldPlaceOrder(user *models.User) bool {
 		orderProbability *= multiplier
 	}
 
-	return s.Rng.Float64() < orderProbability
+	return s.safeFloat64() < orderProbability
 
 }
 
@@ -1246,7 +1375,7 @@ func (s *Simulator) generateNextOrderTime(user *models.User) time.Time {
 	adjustedInterval := baseInterval * timeOfDayFactor * dayOfWeekFactor
 
 	// Add some randomness (±20% of the adjusted interval)
-	randomFactor := 0.8 + (0.4 * s.Rng.Float64())
+	randomFactor := 0.8 + (0.4 * s.safeFloat64())
 	finalInterval := adjustedInterval * randomFactor
 
 	// Convert interval to duration
@@ -1397,7 +1526,7 @@ func (s *Simulator) generateRandomPaymentMethod(orderAmount float64) string {
 	}
 
 	// select payment method
-	randVal := s.Rng.Float64()
+	randVal := s.safeFloat64()
 	cumulativeWeight := 0.0
 
 	for method, weight := range weights {
@@ -1410,6 +1539,242 @@ func (s *Simulator) generateRandomPaymentMethod(orderAmount float64) string {
 	return "card" // default fallback
 }
 
+func (s *Simulator) calculateOrderProbability(currentTime time.Time, segment models.CustomerSegment) float64 {
+	// Start with base probability from segment's orders per month
+	baseProbability := segment.OrdersPerMonth / (30.0 * 24.0) // Convert to hourly probability
+
+	// Apply time-based multipliers
+	timeMultiplier := s.calculateTimeMultiplier(currentTime)
+	weatherMultiplier := s.calculateWeatherOrderMultiplier()
+	seasonalMultiplier := s.calculateSeasonalMultiplier(currentTime)
+	eventMultiplier := s.calculateEventMultiplier(currentTime)
+
+	probability := baseProbability * timeMultiplier * weatherMultiplier * seasonalMultiplier * eventMultiplier
+
+	return math.Min(1.0, probability) // Cap at 100%
+}
+
+func (s *Simulator) calculateTimeMultiplier(currentTime time.Time) float64 {
+	hour := currentTime.Hour()
+	weekday := currentTime.Weekday()
+
+	// Base multiplier
+	multiplier := 1.0
+
+	// Time of day adjustments
+	switch {
+	case hour >= 11 && hour <= 14: // Lunch rush
+		multiplier *= 2.0
+	case hour >= 18 && hour <= 21: // Dinner rush
+		multiplier *= 2.5
+	case hour >= 22 || hour <= 5: // Late night/early morning
+		multiplier *= 0.3
+	case hour >= 6 && hour <= 10: // Breakfast
+		multiplier *= 1.2
+	case hour >= 15 && hour <= 17: // Afternoon lull
+		multiplier *= 0.7
+	}
+
+	// Day of week adjustments
+	switch weekday {
+	case time.Friday:
+		multiplier *= 1.4
+		// Additional boost for Friday dinner and late night
+		if hour >= 17 {
+			multiplier *= 1.3
+		}
+	case time.Saturday:
+		multiplier *= 1.5
+		// Weekend specific timing adjustments
+		if hour >= 11 && hour <= 14 {
+			multiplier *= 1.2 // Longer lunch period
+		}
+	case time.Sunday:
+		multiplier *= 1.3
+		// Sunday specific patterns
+		if hour >= 10 && hour <= 15 {
+			multiplier *= 1.4 // Brunch hours
+		}
+	case time.Monday:
+		multiplier *= 0.9 // Generally slower
+	case time.Thursday:
+		multiplier *= 1.1 // Slight end-of-week increase
+	}
+
+	// pay period effect (assuming bi-monthly)
+	dayOfMonth := currentTime.Day()
+	if dayOfMonth == 15 || dayOfMonth <= 2 {
+		multiplier *= 1.3 // payday boost
+	}
+
+	return multiplier
+}
+
+func (s *Simulator) calculateWeatherOrderMultiplier() float64 {
+	weather := s.getCurrentWeather()
+	temp := s.getCurrentTemperature()
+
+	// base multiplier
+	multiplier := 1.0
+
+	// weather condition adjustments
+	weatherMultipliers := map[string]float64{
+		"rain":   1.4, // People more likely to order in rain
+		"snow":   1.6, // Even more likely in snow
+		"storm":  1.8, // Highest during storms
+		"cloudy": 1.1, // Slight increase
+		"clear":  0.9, // Slight decrease in good weather
+		"fog":    1.2, // Moderate increase
+		"windy":  1.2,
+	}
+
+	if multiplier, exists := weatherMultipliers[weather]; exists {
+		multiplier *= multiplier
+	}
+
+	// temperature adjustments
+	switch {
+	case temp <= 0:
+		multiplier *= 1.5 // cold weather increases orders
+	case temp <= 10:
+		multiplier *= 1.3
+	case temp >= 30:
+		multiplier *= 1.4 // hot weather increases orders
+	case temp >= 25:
+		multiplier *= 1.2
+	case temp >= 15 && temp <= 25:
+		multiplier *= 0.9 // pleasant weather decreases orders
+	}
+
+	// time-based weather impact
+	hour := s.CurrentTime.Hour()
+	if hour >= 17 && hour <= 22 { // evening hours
+		if weather == "rain" || weather == "snow" || weather == "storm" {
+			multiplier *= 1.2 // weather has stronger effect during dinner hours
+		}
+	}
+
+	return multiplier
+}
+
+func (s *Simulator) calculateSeasonalMultiplier(currentTime time.Time) float64 {
+	month := currentTime.Month()
+
+	// base seasonal patterns
+	seasonalMultipliers := map[time.Month]float64{
+		time.January:   1.2, // Post-holiday, cold weather
+		time.February:  1.1,
+		time.March:     1.0,
+		time.April:     0.9,
+		time.May:       0.8, // Nice weather, less ordering
+		time.June:      0.9,
+		time.July:      1.0, // Hot weather increases orders
+		time.August:    1.0,
+		time.September: 1.1, // Back to school/work
+		time.October:   1.2,
+		time.November:  1.3, // Cold weather, holiday season
+		time.December:  1.4, // Peak holiday season
+	}
+
+	multiplier := seasonalMultipliers[month]
+
+	// adjust for specific periods
+	dayOfMonth := currentTime.Day()
+
+	// holiday season adjustments (December)
+	if month == time.December {
+		if dayOfMonth >= 15 && dayOfMonth <= 24 {
+			multiplier *= 1.3 // Pre-Christmas boost
+		} else if dayOfMonth >= 26 && dayOfMonth <= 31 {
+			multiplier *= 1.2 // Post-Christmas/New Year
+		}
+	}
+
+	// summer vacation effect
+	if (month == time.July || month == time.August) &&
+		(dayOfMonth >= 15 && dayOfMonth <= 31) {
+		multiplier *= 0.9 // Reduced orders during peak vacation
+	}
+
+	// beginning of school year
+	if month == time.September && dayOfMonth <= 15 {
+		multiplier *= 1.2 // back to school boost
+	}
+
+	return multiplier
+}
+
+func (s *Simulator) calculateEventMultiplier(currentTime time.Time) float64 {
+	multiplier := 1.0
+
+	// check for special dates
+	dateKey := currentTime.Format("01-02")
+	specialDates := map[string]float64{
+		"12-31": 2.0, // New Year's Eve
+		"12-24": 1.5, // Christmas Eve
+		"12-25": 0.3, // Christmas Day
+		"01-01": 1.7, // New Year's Day
+		"02-14": 1.8, // Valentine's Day
+		"10-31": 1.4, // Halloween
+	}
+
+	if eventMultiplier, exists := specialDates[dateKey]; exists {
+		multiplier *= eventMultiplier
+	}
+
+	// Academic calendar effects
+	if s.isUniversityArea() {
+		switch {
+		case s.isFinalsWeek():
+			multiplier *= 1.5 // Students ordering more during finals
+		case s.isMovingWeek():
+			multiplier *= 1.3 // High activity during moving periods
+		case s.isSpringBreak():
+			multiplier *= 0.7 // Lower activity during breaks
+		}
+	}
+
+	// cultural and local festivals
+	if events := s.getLocalFestivals(currentTime); len(events) > 0 {
+		// different festivals might have different effects
+		for _, festival := range events {
+			multiplier *= festival.Multiplier
+		}
+	}
+
+	return multiplier
+}
+
+func (s *Simulator) getLocalFestivals(t time.Time) []LocalEvent {
+	var festivals []LocalEvent
+
+	// Example festival definitions
+	// In a real implementation, this would likely come from a database or configuration
+	yearDay := t.YearDay()
+
+	// Example: Summer Festival (June 1-7)
+	if month := t.Month(); month == time.June && t.Day() <= 7 {
+		festivals = append(festivals, LocalEvent{
+			Type:       "festival",
+			Multiplier: 0.8, // Reduced delivery orders during festival
+			StartTime:  time.Date(t.Year(), time.June, 1, 0, 0, 0, 0, t.Location()),
+			EndTime:    time.Date(t.Year(), time.June, 7, 23, 59, 59, 0, t.Location()),
+		})
+	}
+
+	// Example: Food Truck Week (reduces restaurant orders)
+	if weekNum := yearDay / 7; weekNum == 30 { // Around late July
+		festivals = append(festivals, LocalEvent{
+			Type:       "food_event",
+			Multiplier: 0.7,
+			StartTime:  t,
+			EndTime:    t.AddDate(0, 0, 7),
+		})
+	}
+
+	return festivals
+}
+
 func (s *Simulator) assignDeliveryPartner(order *models.Order) {
 	restaurant := s.getRestaurant(order.RestaurantID)
 	if restaurant == nil {
@@ -1419,7 +1784,7 @@ func (s *Simulator) assignDeliveryPartner(order *models.Order) {
 	availablePartners := s.getAvailablePartnersNear(restaurant.Location)
 	log.Printf("Attempting to assign partner for order %s. Available partners: %d", order.ID, len(availablePartners))
 	if len(availablePartners) > 0 {
-		selectedPartner := availablePartners[s.Rng.Intn(len(availablePartners))]
+		selectedPartner := availablePartners[s.safeIntn(len(availablePartners))]
 		if selectedPartner != nil {
 			order.DeliveryPartnerID = selectedPartner.ID
 			selectedPartner.Status = models.PartnerStatusEnRoutePickup
@@ -1535,71 +1900,55 @@ func (s *Simulator) updatePartnerMetrics(partner *models.DeliveryPartner, newLoc
 
 func (s *Simulator) updateDeliveryPartnerLocations() {
 	for i, partner := range s.DeliveryPartners {
-		var newLocation models.Location
-		var locationUpdated bool
-
-		// calculate the duration since last update
-		duration := s.CurrentTime.Sub(partner.LastUpdateTime)
-
-		switch partner.Status {
-		case models.PartnerStatusAvailable:
-			newLocation = s.moveTowardsHotspot(partner, duration)
-			locationUpdated = true
-		case models.PartnerStatusEnRoutePickup, models.PartnerStatusEnRouteDelivery:
-			order := s.getPartnerCurrentOrder(partner)
-			if order == nil {
-				log.Printf("Warning: Partner %s has status %s but no current order", partner.ID, partner.Status)
-				continue
-			}
-
-			var destination models.Location
-			if partner.Status == models.PartnerStatusEnRoutePickup {
-				restaurant := s.getRestaurant(order.RestaurantID)
-				if restaurant == nil {
-					log.Printf("Error: Restaurant not found for order %s", order.ID)
-					continue
-				}
-				destination = restaurant.Location
-			} else {
-				user := s.getUser(order.CustomerID)
-				if user == nil {
-					log.Printf("Error: User not found for order %s", order.ID)
-					continue
-				}
-				destination = user.Location
-			}
-
-			newLocation = s.moveTowards(partner.CurrentLocation, destination, duration)
-			locationUpdated = true
-
-			if s.isAtLocation(newLocation, destination) {
-				if partner.Status == models.PartnerStatusEnRoutePickup {
-					s.DeliveryPartners[i].Status = models.PartnerStatusWaitingForPickup
-					log.Printf("Partner %s arrived at restaurant for order %s", partner.ID, order.ID)
-				} else {
-					s.DeliveryPartners[i].Status = models.PartnerStatusAvailable
-					s.DeliveryPartners[i].CurrentOrderID = ""
-					log.Printf("Partner %s completed delivery of order %s", partner.ID, order.ID)
-					s.handleDeliverOrder(order)
-				}
-			}
+		if partner.Status == models.PartnerStatusAvailable {
+			continue
 		}
 
-		if locationUpdated {
-			currentSpeed := s.calculateAdjustedDeliverySpeed(partner, s.CurrentTime)
+		order := s.getPartnerCurrentOrder(partner)
+		if order == nil {
+			continue
+		}
 
-			s.updatePartnerMetrics(s.DeliveryPartners[i], newLocation, currentSpeed)
+		var destination models.Location
+		if partner.Status == models.PartnerStatusEnRoutePickup {
+			restaurant := s.getRestaurant(order.RestaurantID)
+			if restaurant == nil {
+				continue
+			}
+			destination = restaurant.Location
+		} else if partner.Status == models.PartnerStatusEnRouteDelivery {
+			user := s.getUser(order.CustomerID)
+			if user == nil {
+				continue
+			}
+			destination = user.Location
+		} else {
+			continue
+		}
 
-			s.EventQueue.Enqueue(&models.Event{
-				Time: s.CurrentTime,
-				Type: models.EventUpdatePartnerLocation,
-				Data: &models.PartnerLocationUpdate{
-					PartnerID:   partner.ID,
-					NewLocation: newLocation,
-					Speed:       currentSpeed,
-					OrderID:     s.DeliveryPartners[i].CurrentOrderID,
-				},
-			})
+		// Move partner towards destination
+		duration := s.CurrentTime.Sub(partner.LastUpdateTime)
+		newLocation := s.moveTowards(partner.CurrentLocation, destination, duration)
+		s.DeliveryPartners[i].CurrentLocation = newLocation
+		s.DeliveryPartners[i].LastUpdateTime = s.CurrentTime
+
+		// Check if destination reached
+		if s.isAtLocation(newLocation, destination) {
+			if partner.Status == models.PartnerStatusEnRoutePickup {
+				// Schedule pickup
+				s.EventQueue.Enqueue(&models.Event{
+					Time: s.CurrentTime,
+					Type: models.EventPickUpOrder,
+					Data: order,
+				})
+			} else if partner.Status == models.PartnerStatusEnRouteDelivery {
+				// Schedule delivery
+				s.EventQueue.Enqueue(&models.Event{
+					Time: s.CurrentTime,
+					Type: models.EventDeliverOrder,
+					Data: order,
+				})
+			}
 		}
 	}
 }
@@ -1610,7 +1959,7 @@ func (s *Simulator) estimateArrivalTime(from, to models.Location) time.Time {
 
 	// add some variability to the travel time
 	variability := 0.2 // 20% variability
-	actualTravelTime := travelTime * (1 + (s.Rng.Float64()*2-1)*variability)
+	actualTravelTime := travelTime * (1 + (s.safeFloat64()*2-1)*variability)
 
 	return s.CurrentTime.Add(time.Duration(actualTravelTime * float64(time.Hour)))
 }
@@ -1649,7 +1998,7 @@ func (s *Simulator) estimateDeliveryTime(partner *models.DeliveryPartner, order 
 	bufferTime := s.calculateBufferTime(partner, order)
 
 	// add some randomness (±10%)
-	randomFactor := 0.9 + (s.Rng.Float64() * 0.2)
+	randomFactor := 0.9 + (s.safeFloat64() * 0.2)
 
 	totalTime := totalTravelTime*randomFactor + bufferTime
 
@@ -1890,7 +2239,7 @@ func (s *Simulator) selectRandomMenuItem(restaurant *models.Restaurant, existing
 	}
 
 	// select item based on probabilities
-	randVal := s.Rng.Float64()
+	randVal := s.safeFloat64()
 	cumulativeProbability := 0.0
 
 	for i, item := range eligibleItems {
@@ -2092,20 +2441,6 @@ func (s *Simulator) getTemperatureExtremesMultiplier(temp float64) float64 {
 	}
 
 	return multiplier
-}
-
-func (s *Simulator) isHoliday() bool {
-	// format date as MM-DD
-	dateKey := s.CurrentTime.Format("01-02")
-
-	holidays := map[string]bool{
-		"12-24": true, // Christmas Eve
-		"12-25": true, // Christmas
-		"12-31": true, // New Year's Eve
-		"01-01": true, // New Year's Day
-	}
-
-	return holidays[dateKey]
 }
 
 func (s *Simulator) getCurrentLocation() models.Location {
@@ -2414,7 +2749,7 @@ func (s *Simulator) determineOrderSize(user *models.User, pattern OrderPattern) 
 	}
 
 	// random variation
-	variation := s.Rng.Intn(2) - 1 // -1, 0, or 1
+	variation := s.safeIntn(2) - 1 // -1, 0, or 1
 
 	return max(1, baseSize+variation)
 }
@@ -2450,10 +2785,10 @@ func (s *Simulator) selectProbabilistically(items []*models.MenuItem, probabilit
 	}
 
 	if totalProb == 0 {
-		return items[s.Rng.Intn(len(items))]
+		return items[s.safeIntn(len(items))]
 	}
 
-	r := s.Rng.Float64() * totalProb
+	r := s.safeFloat64() * totalProb
 	cumulative := 0.0
 
 	for i, item := range items {
@@ -2657,8 +2992,8 @@ func (s *Simulator) adjustRestaurantCapacity(restaurant *models.Restaurant) int 
 
 	// add random variation within cluster flexibility
 	flexibility := cluster.CapacityFlexibility
-	variation := (s.Rng.Float64()*2 - 1) * flexibility
-	adjustedCapacity *= (1 + variation)
+	variation := (s.safeFloat64()*2 - 1) * flexibility
+	adjustedCapacity *= 1 + variation
 
 	return int(math.Max(float64(cluster.BaseCapacity/2),
 		math.Min(float64(cluster.BaseCapacity*2), adjustedCapacity)))
@@ -2881,7 +3216,7 @@ func (s *Simulator) estimatePrepTime(restaurant *models.Restaurant, items []stri
 	finalPrepTime := baseTime * loadFactor * timeMultiplier * complexityMultiplier
 
 	// add some randomness (±10%)
-	randomFactor := 0.9 + (s.Rng.Float64() * 0.2)
+	randomFactor := 0.9 + (s.safeFloat64() * 0.2)
 
 	return math.Max(restaurant.MinPrepTime, finalPrepTime*randomFactor)
 }
@@ -2895,12 +3230,12 @@ func (s *Simulator) isUrbanArea(loc models.Location) bool {
 }
 
 func (s *Simulator) getPartnerIndex(partnerID string) int {
-	for i, partner := range s.DeliveryPartners {
-		if partner.ID == partnerID {
+	for i := range s.DeliveryPartners {
+		if i < len(s.DeliveryPartners) && s.DeliveryPartners[i].ID == partnerID {
 			return i
 		}
 	}
-	return -1 // Return -1 if partner not found
+	return -1
 }
 
 func (s *Simulator) moveTowardsHotspot(partner *models.DeliveryPartner, duration time.Duration) models.Location {
@@ -2944,8 +3279,8 @@ func (s *Simulator) findNearestHotspot(loc models.Location) models.Location {
 
 	// add some randomness to the chosen hotspot
 	jitter := 0.001 // About 111 meters
-	nearestHotspot.Location.Lat += (s.Rng.Float64() - 0.5) * jitter
-	nearestHotspot.Location.Lon += (s.Rng.Float64() - 0.5) * jitter
+	nearestHotspot.Location.Lat += (s.safeFloat64() - 0.5) * jitter
+	nearestHotspot.Location.Lon += (s.safeFloat64() - 0.5) * jitter
 
 	return nearestHotspot.Location
 }
@@ -2973,7 +3308,7 @@ func (s *Simulator) findNearestRestaurantOrHotspot(loc models.Location) models.L
 
 func (s *Simulator) moveTowards(from, to models.Location, duration time.Duration) models.Location {
 	distance := s.calculateDistance(from, to)
-	speed := s.Config.PartnerMoveSpeed * (1 + (s.Rng.Float64()*0.2 - 0.1)) // Add 10% randomness
+	speed := s.Config.PartnerMoveSpeed * (1 + (s.safeFloat64()*0.2 - 0.1)) // Add 10% randomness
 
 	// calculate max distance that can be moved in this duration
 	maxDistance := speed * duration.Hours()
@@ -3320,18 +3655,6 @@ func (s *Simulator) getTimeBasedRatingWeight(orderTime time.Time) float64 {
 	return RatingDistributions.TimeWeights["normal_hours"]
 }
 
-func (s *Simulator) getCurrentTemperature() float64 {
-	baseTemp := s.calculateBaseTemperature()
-	timeAdjustment := s.getTimeOfDayTempAdjustment()
-	randomVariation := s.getRandomTempVariation()
-	weatherEffect := s.getWeatherTempEffect()
-
-	finalTemp := baseTemp + timeAdjustment + randomVariation + weatherEffect
-
-	// cap temperature within realistic bounds for the location
-	return math.Max(-20.0, math.Min(40.0, finalTemp))
-}
-
 func (s *Simulator) calculateBaseTemperature() float64 {
 	// base temperature follows a sinusoidal pattern through the year
 	// assuming config.CityLat determines hemisphere
@@ -3414,11 +3737,39 @@ func (s *Simulator) getRandomTempVariation() float64 {
 
 	// use a hash of the hour to generate consistent random variation
 	hash := fnv.New32()
-	hash.Write([]byte(hourKey))
+	_, err := hash.Write([]byte(hourKey))
+	if err != nil {
+		return 0
+	}
 	hashValue := float64(hash.Sum32()) / float64(math.MaxUint32)
 
 	// convert to temperature variation (-2 to +2 degrees)
 	return (hashValue * 4) - 2
+}
+
+func (s *Simulator) getCurrentTemperature() float64 {
+	baseTemp := s.calculateBaseTemperature()
+	timeAdjustment := s.getTimeOfDayTempAdjustment()
+	randomVariation := s.getRandomTempVariation()
+
+	var weatherEffect float64
+	if s.WeatherState != nil {
+		switch s.WeatherState.Condition {
+		case "rain", "cloudy", "overcast":
+			weatherEffect = -2
+		case "snow":
+			weatherEffect = -8
+		case "storm":
+			weatherEffect = -4
+		case "clear":
+			weatherEffect = 1
+		}
+	}
+
+	finalTemp := baseTemp + timeAdjustment + randomVariation + weatherEffect
+
+	// cap temperature within realistic bounds for the location
+	return math.Max(-20.0, math.Min(40.0, finalTemp))
 }
 
 func (s *Simulator) getCurrentWeather() string {
@@ -3430,6 +3781,44 @@ func (s *Simulator) getCurrentWeather() string {
 	return s.WeatherState.Condition
 }
 
+func (s *Simulator) getWeatherTempEffect() float64 {
+	if s.WeatherState == nil {
+		return 0
+	}
+
+	weather := s.WeatherState.Condition
+
+	// temperature adjustments based on weather conditions
+	weatherEffects := map[string]struct {
+		min float64
+		max float64
+	}{
+		"clear":    {0, 2},    // clear skies can be slightly warmer
+		"cloudy":   {-1, 0},   // clouds moderate temperature
+		"rain":     {-3, -1},  // rain usually means cooler
+		"snow":     {-10, -5}, // snow requires cold temperatures
+		"storm":    {-5, -2},  // storms usually bring temperature drops
+		"fog":      {-2, 0},   // fog often occurs in cooler conditions
+		"overcast": {-2, -1},  // overcast skies reduce temperature
+	}
+
+	if effect, exists := weatherEffects[weather]; exists {
+		// get a consistent random value for the current hour
+		hourKey := s.CurrentTime.Format("2006010215")
+		hash := fnv.New32()
+		_, err := hash.Write([]byte(hourKey))
+		if err != nil {
+			return 0
+		}
+		randomValue := float64(hash.Sum32()) / float64(math.MaxUint32)
+
+		// interpolate between min and max effect
+		return effect.min + (effect.max-effect.min)*randomValue
+	}
+
+	return 0
+}
+
 func (s *Simulator) generateNewWeather() {
 	if s.WeatherState == nil {
 		// initialise with clear weather if no current state
@@ -3438,10 +3827,11 @@ func (s *Simulator) generateNewWeather() {
 			StartTime: s.CurrentTime,
 			Duration:  4 * time.Hour,
 		}
+		return
 	}
 
 	currentSeason := s.getCurrentSeason()
-	currentTemp := s.getCurrentTemperature()
+	baseTemp := s.calculateBaseTemperature()
 
 	// get possible transitions from current weather
 	possibleTransitions := weatherTransitions[s.WeatherState.Condition]
@@ -3458,8 +3848,10 @@ func (s *Simulator) generateNewWeather() {
 			probability *= modifier
 		}
 
-		// apply temperature-based modifications
-		probability *= s.getTemperatureWeatherModifier(currentTemp, transition.Condition)
+		// Simplify temperature checks
+		if transition.Condition == "snow" && baseTemp > 2 {
+			probability = 0 // No snow above 2°C
+		}
 
 		// apply time of day modifier
 		probability *= s.getTimeOfDayWeatherModifier(transition.Condition)
@@ -3471,13 +3863,13 @@ func (s *Simulator) generateNewWeather() {
 		totalProbability += probability
 	}
 
-	// normalise probabilities
+	// normalize probabilities
 	for i := range adjustedProbabilities {
 		adjustedProbabilities[i] /= totalProbability
 	}
 
 	// select new weather condition
-	randVal := s.Rng.Float64()
+	randVal := s.safeFloat64()
 	cumulativeProbability := 0.0
 
 	var selectedTransition WeatherTransition
@@ -3486,6 +3878,15 @@ func (s *Simulator) generateNewWeather() {
 		if randVal <= cumulativeProbability {
 			selectedTransition = possibleTransitions[i]
 			break
+		}
+	}
+
+	// if no transition was selected, keep current weather
+	if selectedTransition.Condition == "" {
+		selectedTransition = WeatherTransition{
+			Condition:   s.WeatherState.Condition,
+			MinDuration: 1 * time.Hour,
+			MaxDuration: 4 * time.Hour,
 		}
 	}
 
@@ -3607,14 +4008,14 @@ func (s *Simulator) generateWeatherDuration(transition WeatherTransition) time.D
 
 	// generate random duration between min and max
 	durationRange := maxDuration - minDuration
-	randomDuration := time.Duration(s.Rng.Float64() * float64(durationRange))
+	randomDuration := time.Duration(s.safeFloat64() * float64(durationRange))
 
 	return minDuration + randomDuration
 }
 
 func (s *Simulator) generateWeatherIntensity(condition string) float64 {
 	// generate base intensity
-	intensity := 0.3 + (s.Rng.Float64() * 0.7)
+	intensity := 0.3 + (s.safeFloat64() * 0.7)
 
 	// adjust based on condition
 	switch condition {
@@ -3628,7 +4029,7 @@ func (s *Simulator) generateWeatherIntensity(condition string) float64 {
 }
 
 func (s *Simulator) generateWindSpeed(condition string) float64 {
-	baseSpeed := 5.0 + (s.Rng.Float64() * 15.0) // 5-20 km/h base
+	baseSpeed := 5.0 + (s.safeFloat64() * 15.0) // 5-20 km/h base
 
 	switch condition {
 	case "storm":
@@ -3643,7 +4044,7 @@ func (s *Simulator) generateWindSpeed(condition string) float64 {
 }
 
 func (s *Simulator) generateHumidity(condition string) float64 {
-	baseHumidity := 0.4 + (s.Rng.Float64() * 0.3) // 40-70% base
+	baseHumidity := 0.4 + (s.safeFloat64() * 0.3) // 40-70% base
 
 	switch condition {
 	case "rain", "storm":
@@ -3660,45 +4061,14 @@ func (s *Simulator) generateHumidity(condition string) float64 {
 func (s *Simulator) generatePrecipitation(condition string) float64 {
 	switch condition {
 	case "rain":
-		return 1.0 + (s.Rng.Float64() * 9.0) // 1-10mm/hour
+		return 1.0 + (s.safeFloat64() * 9.0) // 1-10mm/hour
 	case "storm":
-		return 10.0 + (s.Rng.Float64() * 20.0) // 10-30mm/hour
+		return 10.0 + (s.safeFloat64() * 20.0) // 10-30mm/hour
 	case "snow":
-		return 1.0 + (s.Rng.Float64() * 4.0) // 1-5mm/hour equivalent
+		return 1.0 + (s.safeFloat64() * 4.0) // 1-5mm/hour equivalent
 	default:
 		return 0.0
 	}
-}
-
-func (s *Simulator) getWeatherTempEffect() float64 {
-	weather := s.getCurrentWeather()
-
-	// Temperature adjustments based on weather conditions
-	weatherEffects := map[string]struct {
-		min float64
-		max float64
-	}{
-		"clear":    {0, 2},    // Clear skies can be slightly warmer
-		"cloudy":   {-1, 0},   // Clouds moderate temperature
-		"rain":     {-3, -1},  // Rain usually means cooler
-		"snow":     {-10, -5}, // Snow requires cold temperatures
-		"storm":    {-5, -2},  // Storms usually bring temperature drops
-		"fog":      {-2, 0},   // Fog often occurs in cooler conditions
-		"overcast": {-2, -1},  // Overcast skies reduce temperature
-	}
-
-	if effect, exists := weatherEffects[weather]; exists {
-		// Get a consistent random value for the current hour
-		hourKey := s.CurrentTime.Format("2006010215")
-		hash := fnv.New32()
-		hash.Write([]byte(hourKey))
-		randomValue := float64(hash.Sum32()) / float64(math.MaxUint32)
-
-		// Interpolate between min and max effect
-		return effect.min + (effect.max-effect.min)*randomValue
-	}
-
-	return 0
 }
 
 func (s *Simulator) canSnow() bool {
@@ -3749,7 +4119,7 @@ func (s *Simulator) isRainyOrColdWeather() bool {
 		baseChance = 0.3
 	}
 
-	return s.Rng.Float64() < baseChance
+	return s.safeFloat64() < baseChance
 }
 
 func (s *Simulator) getTimeBasedCapacityMultiplier(currentTime time.Time) float64 {
@@ -3934,8 +4304,8 @@ func (s *Simulator) getSpecialEventCapacityMultiplier() float64 {
 	}
 
 	// add randomness for unexpected events
-	if s.Rng.Float64() < 0.05 { // 5% chance of random event
-		randomFactor := 0.8 + (s.Rng.Float64() * 0.4) // random factor between 0.8 and 1.2
+	if s.safeFloat64() < 0.05 { // 5% chance of random event
+		randomFactor := 0.8 + (s.safeFloat64() * 0.4) // random factor between 0.8 and 1.2
 		multiplier *= randomFactor
 	}
 
@@ -3947,10 +4317,14 @@ func (s *Simulator) getLocalEvents(date time.Time) []LocalEvent {
 	// for this simulation, we'll generate some random events
 	events := make([]LocalEvent, 0)
 
-	// randomly generate events based on the day
-	if s.Rng.Float64() < 0.2 { // 20% chance of a local event
+	s.rngMutex.Lock()
+	shouldGenerateEvent := s.safeFloat64() < 0.2 // 20% chance of a local event
+	eventIndex := s.safeIntn(4)                  // For selecting event type
+	s.rngMutex.Unlock()
+
+	if shouldGenerateEvent {
 		eventTypes := []string{"sports_game", "concert", "festival", "convention"}
-		eventType := eventTypes[s.Rng.Intn(len(eventTypes))]
+		eventType := eventTypes[eventIndex]
 
 		event := LocalEvent{
 			Type:      eventType,
@@ -3966,7 +4340,7 @@ func (s *Simulator) getLocalEvents(date time.Time) []LocalEvent {
 func (s *Simulator) isUniversityArea() bool {
 	// this would check if the restaurant is near a university
 	// for simulation, return true 20% of the time
-	return s.Rng.Float64() < 0.2
+	return s.safeFloat64() < 0.2
 }
 
 func (s *Simulator) isFinalsWeek() bool {
@@ -3992,6 +4366,65 @@ func (s *Simulator) isSpringBreak() bool {
 	return month == time.March && day >= 10 && day <= 20
 }
 
+func (s *Simulator) isHoliday() bool {
+	// format date as MM-DD
+	dateKey := s.CurrentTime.Format("01-02")
+
+	holidays := map[string]bool{
+		"12-24": true, // Christmas Eve
+		"12-25": true, // Christmas
+		"12-31": true, // New Year's Eve
+		"01-01": true, // New Year's Day
+	}
+
+	return holidays[dateKey]
+}
+
+func (s *Simulator) calculateSeasonalGrowthRate(baseRate float64) float64 {
+	month := s.CurrentTime.Month()
+
+	// seasonal adjustments
+	seasonalFactors := map[time.Month]float64{
+		time.January:   0.8, // Post-holiday slowdown
+		time.February:  0.9,
+		time.March:     1.0,
+		time.April:     1.1,
+		time.May:       1.2,
+		time.June:      1.3, // Summer growth
+		time.July:      1.3,
+		time.August:    1.2,
+		time.September: 1.1, // Back to school/work
+		time.October:   1.0,
+		time.November:  1.1, // Holiday season starting
+		time.December:  1.2, // Peak holiday season
+	}
+
+	seasonalFactor := seasonalFactors[month]
+
+	// apply week of month adjustment
+	dayOfMonth := s.CurrentTime.Day()
+	weekOfMonth := (dayOfMonth - 1) / 7
+	weekFactors := []float64{1.2, 1.0, 0.9, 0.8, 0.9} // weekly pattern
+	weekFactor := weekFactors[weekOfMonth]
+
+	return baseRate * seasonalFactor * weekFactor
+}
+
+func (s *Simulator) safeFloat64() float64 {
+	//s.rngMutex.Lock()
+	//defer s.rngMutex.Unlock()
+	return s.Rng.Float64()
+}
+
+func (s *Simulator) safeIntn(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	//s.rngMutex.Lock()
+	//defer s.rngMutex.Unlock()
+	return s.Rng.Intn(n)
+}
+
 func generateTrafficDensity(hour int) float64 {
 	fake := faker.New()
 	switch {
@@ -4010,20 +4443,6 @@ func generateID() string {
 
 func degreesToRadians(deg float64) float64 {
 	return deg * (math.Pi / 180.0)
-}
-
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
-}
-
-func isBreakfastTime(t time.Time) bool {
-	hour := t.Hour()
-	return hour >= 6 && hour < 11
 }
 
 func getDayPart(hour int) string {

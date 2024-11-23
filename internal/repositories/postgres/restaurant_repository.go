@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"github.com/chrisdamba/foodatasim/internal/models"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -20,21 +21,21 @@ func (r *RestaurantRepository) BulkCreate(ctx context.Context, restaurants []*mo
 		return err
 	}
 	defer tx.Rollback(ctx)
-
+	stmt := `
+        INSERT INTO restaurants (
+            id, host, name, currency, phone, town, slug_name, website_logo_url,
+            offline, location, cuisines, rating, total_ratings, prep_time,
+            min_prep_time, avg_prep_time, pickup_efficiency, capacity,
+            price_tier, reputation_metrics, reputation_history, demand_patterns,
+            market_position, popularity_metrics
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9,
+            ST_SetSRID(ST_MakePoint($10, $11), 4326)::geography,
+            $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
+        )
+    `
 	for _, restaurant := range restaurants {
-		query := `
-            INSERT INTO restaurants (
-                id, host, name, currency, phone, town, slug_name, website_logo_url,
-                offline, location, cuisines, rating, total_ratings, prep_time,
-                min_prep_time, avg_prep_time, pickup_efficiency, capacity
-            ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9,
-                ST_SetSRID(ST_MakePoint($10, $11), 4326)::geography,
-                $12, $13, $14, $15, $16, $17, $18, $19
-            )
-        `
-
-		_, err = tx.Exec(ctx, query,
+		_, err = tx.Exec(ctx, stmt,
 			restaurant.ID,
 			restaurant.Host,
 			restaurant.Name,
@@ -54,6 +55,12 @@ func (r *RestaurantRepository) BulkCreate(ctx context.Context, restaurants []*mo
 			restaurant.AvgPrepTime,
 			restaurant.PickupEfficiency,
 			restaurant.Capacity,
+			restaurant.PriceTier,
+			restaurant.ReputationMetrics,
+			restaurant.ReputationHistory,
+			restaurant.DemandPatterns,
+			restaurant.MarketPosition,
+			restaurant.PopularityMetrics,
 		)
 		if err != nil {
 			return err
@@ -69,7 +76,8 @@ func (r *RestaurantRepository) GetAll(ctx context.Context) (map[string]*models.R
             id, host, name, currency, phone, town, slug_name, website_logo_url,
             offline, ST_X(location::geometry) as longitude, ST_Y(location::geometry) as latitude,
             cuisines, rating, total_ratings, prep_time, min_prep_time, avg_prep_time,
-            pickup_efficiency, capacity
+            pickup_efficiency, capacity, price_tier, reputation_metrics,
+            reputation_history, demand_patterns, market_position, popularity_metrics
         FROM restaurants
     `
 	rows, err := r.pool.Query(ctx, query)
@@ -102,6 +110,12 @@ func (r *RestaurantRepository) GetAll(ctx context.Context) (map[string]*models.R
 			&restaurant.AvgPrepTime,
 			&restaurant.PickupEfficiency,
 			&restaurant.Capacity,
+			&restaurant.PriceTier,
+			&restaurant.ReputationMetrics,
+			&restaurant.ReputationHistory,
+			&restaurant.DemandPatterns,
+			&restaurant.MarketPosition,
+			&restaurant.PopularityMetrics,
 		)
 		if err != nil {
 			return nil, err
@@ -178,7 +192,8 @@ func (r *RestaurantRepository) FindNearby(ctx context.Context, location models.L
             id, host, name, currency, phone, town, slug_name, website_logo_url,
             offline, ST_X(location::geometry) as longitude, ST_Y(location::geometry) as latitude,
             cuisines, rating, total_ratings, prep_time, min_prep_time, avg_prep_time,
-            pickup_efficiency, capacity,
+            pickup_efficiency, capacity, price_tier, reputation_metrics,
+            reputation_history, demand_patterns, market_position, popularity_metrics,
             ST_Distance(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) as distance
         FROM restaurants
         WHERE ST_DWithin(
@@ -195,39 +210,7 @@ func (r *RestaurantRepository) FindNearby(ctx context.Context, location models.L
 	}
 	defer rows.Close()
 
-	var restaurants []*models.Restaurant
-	for rows.Next() {
-		var lon, lat, distance float64
-		restaurant := &models.Restaurant{}
-		err := rows.Scan(
-			&restaurant.ID,
-			&restaurant.Host,
-			&restaurant.Name,
-			&restaurant.Currency,
-			&restaurant.Phone,
-			&restaurant.Town,
-			&restaurant.SlugName,
-			&restaurant.WebsiteLogoURL,
-			&restaurant.Offline,
-			&lon,
-			&lat,
-			&restaurant.Cuisines,
-			&restaurant.Rating,
-			&restaurant.TotalRatings,
-			&restaurant.PrepTime,
-			&restaurant.MinPrepTime,
-			&restaurant.AvgPrepTime,
-			&restaurant.PickupEfficiency,
-			&restaurant.Capacity,
-			&distance,
-		)
-		if err != nil {
-			return nil, err
-		}
-		restaurant.Location = models.Location{Lon: lon, Lat: lat}
-		restaurants = append(restaurants, restaurant)
-	}
-	return restaurants, nil
+	return r.scanRestaurants(rows)
 }
 
 func (r *RestaurantRepository) FindByCuisine(ctx context.Context, cuisine string) ([]*models.Restaurant, error) {
@@ -236,7 +219,8 @@ func (r *RestaurantRepository) FindByCuisine(ctx context.Context, cuisine string
             id, host, name, currency, phone, town, slug_name, website_logo_url,
             offline, ST_X(location::geometry) as longitude, ST_Y(location::geometry) as latitude,
             cuisines, rating, total_ratings, prep_time, min_prep_time, avg_prep_time,
-            pickup_efficiency, capacity
+            pickup_efficiency, capacity, price_tier, reputation_metrics,
+            reputation_history, demand_patterns, market_position, popularity_metrics
         FROM restaurants
         WHERE $1 = ANY(cuisines)
     `
@@ -247,39 +231,7 @@ func (r *RestaurantRepository) FindByCuisine(ctx context.Context, cuisine string
 	}
 	defer rows.Close()
 
-	var restaurants []*models.Restaurant
-	for rows.Next() {
-		var lon, lat, distance float64
-		restaurant := &models.Restaurant{}
-		err := rows.Scan(
-			&restaurant.ID,
-			&restaurant.Host,
-			&restaurant.Name,
-			&restaurant.Currency,
-			&restaurant.Phone,
-			&restaurant.Town,
-			&restaurant.SlugName,
-			&restaurant.WebsiteLogoURL,
-			&restaurant.Offline,
-			&lon,
-			&lat,
-			&restaurant.Cuisines,
-			&restaurant.Rating,
-			&restaurant.TotalRatings,
-			&restaurant.PrepTime,
-			&restaurant.MinPrepTime,
-			&restaurant.AvgPrepTime,
-			&restaurant.PickupEfficiency,
-			&restaurant.Capacity,
-			&distance,
-		)
-		if err != nil {
-			return nil, err
-		}
-		restaurant.Location = models.Location{Lon: lon, Lat: lat}
-		restaurants = append(restaurants, restaurant)
-	}
-	return restaurants, nil
+	return r.scanRestaurants(rows)
 }
 
 func (r *RestaurantRepository) Count(ctx context.Context) (int, error) {
@@ -291,4 +243,45 @@ func (r *RestaurantRepository) Count(ctx context.Context) (int, error) {
 func (r *RestaurantRepository) DeleteAll(ctx context.Context) error {
 	_, err := r.pool.Exec(ctx, "TRUNCATE TABLE restaurants CASCADE")
 	return err
+}
+
+func (r *RestaurantRepository) scanRestaurants(rows pgx.Rows) ([]*models.Restaurant, error) {
+	var restaurants []*models.Restaurant
+	for rows.Next() {
+		var lon, lat float64
+		restaurant := &models.Restaurant{}
+		err := rows.Scan(
+			&restaurant.ID,
+			&restaurant.Host,
+			&restaurant.Name,
+			&restaurant.Currency,
+			&restaurant.Phone,
+			&restaurant.Town,
+			&restaurant.SlugName,
+			&restaurant.WebsiteLogoURL,
+			&restaurant.Offline,
+			&lon,
+			&lat,
+			&restaurant.Cuisines,
+			&restaurant.Rating,
+			&restaurant.TotalRatings,
+			&restaurant.PrepTime,
+			&restaurant.MinPrepTime,
+			&restaurant.AvgPrepTime,
+			&restaurant.PickupEfficiency,
+			&restaurant.Capacity,
+			&restaurant.PriceTier,
+			&restaurant.ReputationMetrics,
+			&restaurant.ReputationHistory,
+			&restaurant.DemandPatterns,
+			&restaurant.MarketPosition,
+			&restaurant.PopularityMetrics,
+		)
+		if err != nil {
+			return nil, err
+		}
+		restaurant.Location = models.Location{Lon: lon, Lat: lat}
+		restaurants = append(restaurants, restaurant)
+	}
+	return restaurants, nil
 }

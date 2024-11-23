@@ -208,72 +208,6 @@ type CompetitiveMetrics struct {
 	variety float64
 }
 
-type UserCreatedEvent struct {
-	ID                  string          `json:"id"`
-	Name                string          `json:"name"`
-	Email               string          `json:"email"`
-	JoinDate            int64           `json:"joinDate"`
-	Location            models.Location `json:"location"`
-	Preferences         []string        `json:"preferences"`
-	DietaryRestrictions []string        `json:"dietRestrictions"`
-	OrderFrequency      float64         `json:"orderFrequency"`
-	Timestamp           int64           `json:"timestamp" parquet:"name=timestamp,type=INT64"`
-}
-
-type RestaurantCreatedEvent struct {
-	ID               string          `json:"id"`
-	Host             string          `json:"host"`
-	Name             string          `json:"name"`
-	Currency         int             `json:"currency"`
-	Phone            string          `json:"phone"`
-	Town             string          `json:"town"`
-	SlugName         string          `json:"slugName"`
-	WebsiteLogoURL   string          `json:"websiteLogoUrl"`
-	Offline          string          `json:"offline"`
-	Location         models.Location `json:"location"`
-	Cuisines         []string        `json:"cuisines"`
-	Rating           float64         `json:"rating"`
-	TotalRatings     float64         `json:"totalRatings"`
-	PrepTime         float64         `json:"prepTime"`
-	MinPrepTime      float64         `json:"minPrepTime"`
-	AvgPrepTime      float64         `json:"avgPrepTime"` // Average preparation time in minutes
-	PickupEfficiency float64         `json:"pickupEfficiency"`
-	MenuItems        []string        `json:"menuItemIds"`
-	Capacity         int             `json:"capacity"`
-	Timestamp        int64           `json:"timestamp" parquet:"name=timestamp,type=INT64"`
-}
-
-type DeliveryPartnerCreatedEvent struct {
-	ID              string          `json:"id"`
-	Timestamp       int64           `json:"timestamp" parquet:"name=timestamp,type=INT64"`
-	Name            string          `json:"name"`
-	JoinDate        int64           `json:"joinDate"`
-	Rating          float64         `json:"rating"`
-	TotalRatings    float64         `json:"totalRatings"`
-	Experience      float64         `json:"experienceScore"` // Experience score
-	Speed           float64         `json:"speed"`
-	AvgSpeed        float64         `json:"avgSpeed"`
-	CurrentOrderID  string          `json:"currentOrderID"`
-	CurrentLocation models.Location `json:"currentLocation"`
-	Status          string          `json:"status"` // "available", "en_route_to_pickup", "en_route_to_delivery"
-}
-
-type MenuItemCreatedEvent struct {
-	ID                 string   `json:"id"`
-	Timestamp          int64    `json:"timestamp" parquet:"name=timestamp,type=INT64"`
-	RestaurantID       string   `json:"restaurantID"`
-	Name               string   `json:"name"`
-	Description        string   `json:"description"`
-	Price              float64  `json:"price"`
-	PrepTime           float64  `json:"prepTime"` // Preparation time in minutes
-	Category           string   `json:"category"`
-	Type               string   `json:"type"`       // e.g., "appetizer", "main course", "side dish", "dessert", "drink"
-	Popularity         float64  `json:"popularity"` // A score representing item popularity (e.g., 0.0 to 1.0)
-	PrepComplexity     float64  `json:"prepComplexity"`
-	Ingredients        []string `json:"ingredients"` // List of ingredients
-	IsDiscountEligible bool     `json:"isDiscountEligible"`
-}
-
 // BaseEvent is the common structure for all events
 type BaseEvent struct {
 	Timestamp    int64  `json:"timestamp" parquet:"name=timestamp,type=INT64"`
@@ -297,6 +231,8 @@ type OrderPlacedEvent struct {
 	PaymentMethod     string          `json:"paymentMethod"` // e.g., "card", "cash", "wallet"
 	Address           models.Location `json:"deliveryAddress"`
 	ReviewGenerated   bool            `json:"reviewGenerated"`
+	WeatherCondition  string          `json:"weatherCondition"`
+	Temperature       float64         `json:"temperature"`
 }
 
 // OrderPreparationEvent represents an order being prepared
@@ -334,15 +270,20 @@ type OrderPickupEvent struct {
 
 // PartnerLocationUpdateEvent represents an update to a delivery partner's location
 type PartnerLocationUpdateEvent struct {
-	Timestamp    int64           `json:"timestamp" parquet:"name=timestamp,type=INT64"`
-	EventType    string          `json:"eventType" parquet:"name=eventType,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8"`
-	PartnerID    string          `json:"partnerId" parquet:"name=partnerId,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8"`
-	OrderID      string          `json:"orderId,omitempty" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
-	NewLocation  models.Location `json:"newLocation" parquet:"name=newLocation,type=STRUCT"`
-	CurrentOrder string          `json:"currentOrder,omitempty" parquet:"name=currentOrder,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
-	Status       string          `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8"`
-	UpdateTime   int64           `json:"updateTime" parquet:"name=updateTime,type=INT64"`
-	Speed        float64         `json:"speed,omitempty" parquet:"name=speed,type=DOUBLE,repetitiontype=OPTIONAL"`
+	Timestamp        int64           `json:"timestamp" parquet:"name=timestamp,type=INT64"`
+	EventType        string          `json:"eventType" parquet:"name=eventType,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8"`
+	PartnerID        string          `json:"partnerId" parquet:"name=partnerId,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8"`
+	OrderID          string          `json:"orderId,omitempty" parquet:"name=orderId,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
+	NewLocation      models.Location `json:"newLocation" parquet:"name=newLocation,type=STRUCT"`
+	CurrentOrder     string          `json:"currentOrder,omitempty" parquet:"name=currentOrder,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
+	Status           string          `json:"status" parquet:"name=status,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8"`
+	UpdateTime       int64           `json:"updateTime" parquet:"name=updateTime,type=INT64"`
+	Speed            float64         `json:"speed,omitempty" parquet:"name=speed,type=DOUBLE,repetitiontype=OPTIONAL"`
+	Experience       float64         `json:"experience"`
+	Rating           float64         `json:"rating"`
+	WeatherCondition string          `json:"weatherCondition"`
+	TrafficDensity   float64         `json:"trafficDensity"`
+	AreaType         string          `json:"areaType"`
 }
 
 // OrderInTransitEvent represents an order being in transit
@@ -386,11 +327,16 @@ type OrderCancellationEvent struct {
 
 // UserBehaviourUpdateEvent represents an update to a user's behaviour
 type UserBehaviourUpdateEvent struct {
-	Timestamp      *int64   `json:"timestamp" parquet:"name=timestamp,type=INT64,repetitiontype=OPTIONAL"`
-	EventType      *string  `json:"eventType" parquet:"name=eventType,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
-	UserID         *string  `json:"userId" parquet:"name=userId,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
-	OrderFrequency *float64 `json:"orderFrequency" parquet:"name=orderFrequency,type=DOUBLE,repetitiontype=OPTIONAL"`
-	LastOrderTime  *int64   `json:"lastOrderTime,omitempty" parquet:"name=lastOrderTime,type=INT64,repetitiontype=OPTIONAL"`
+	Timestamp          *int64                  `json:"timestamp" parquet:"name=timestamp,type=INT64,repetitiontype=OPTIONAL"`
+	EventType          *string                 `json:"eventType" parquet:"name=eventType,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
+	UserID             *string                 `json:"userId" parquet:"name=userId,type=BYTE_ARRAY,convertedtype=BYTE_ARRAY,convertedtype=UTF8,repetitiontype=OPTIONAL"`
+	OrderFrequency     *float64                `json:"orderFrequency" parquet:"name=orderFrequency,type=DOUBLE,repetitiontype=OPTIONAL"`
+	LastOrderTime      *int64                  `json:"lastOrderTime,omitempty" parquet:"name=lastOrderTime,type=INT64,repetitiontype=OPTIONAL"`
+	LastNOrders        *int64                  `json:"lastOrderTime,omitempty" parquet:"name=lastOrderTime,type=INT64,repetitiontype=OPTIONAL"`
+	OrderPatterns      *map[time.Weekday][]int `json:"orderPatterns"`
+	AvgOrderValue      *float64                `json:"avgOrderValue"`
+	CuisinePreferences *[]string               `json:"cuisinePreferences"`
+	LocationType       *string                 `json:"locationType"`
 }
 
 // RestaurantStatusUpdateEvent represents an update to a restaurant's status

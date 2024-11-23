@@ -10,15 +10,20 @@ import (
 type DeliveryPartnerFactory struct{}
 
 func (df *DeliveryPartnerFactory) CreateDeliveryPartner(config *models.Config) *models.DeliveryPartner {
-	// calculate city bounds
-	latRange := config.UrbanRadius / 111.0 // Approx. conversion from km to degrees
+	// use smaller radius for initial distribution
+	latRange := (config.UrbanRadius * 0.7) / 111.0 // 70% of urban radius, converted to degrees
 	lonRange := latRange / math.Cos(config.CityLat*math.Pi/180.0)
 
-	// generate random offsets within the urban radius
-	latOffset := (rand.Float64()*2 - 1) * latRange
-	lonOffset := (rand.Float64()*2 - 1) * lonRange
+	// concentrate more partners near city center
+	var latOffset, lonOffset float64
+	if rand.Float64() < 0.7 { // 70% closer to center
+		latOffset = (rand.Float64() * 0.5) * latRange * randSign()
+		lonOffset = (rand.Float64() * 0.5) * lonRange * randSign()
+	} else { // 30% in wider area
+		latOffset = rand.Float64() * latRange * randSign()
+		lonOffset = rand.Float64() * lonRange * randSign()
+	}
 
-	// calculate final latitude and longitude
 	lat := config.CityLat + latOffset
 	lon := config.CityLon + lonOffset
 
@@ -38,4 +43,11 @@ func (df *DeliveryPartnerFactory) CreateDeliveryPartner(config *models.Config) *
 		Status:         models.PartnerStatusAvailable,
 		LastUpdateTime: config.StartDate,
 	}
+}
+
+func randSign() float64 {
+	if rand.Float64() < 0.5 {
+		return -1.0
+	}
+	return 1.0
 }
