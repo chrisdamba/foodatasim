@@ -906,7 +906,6 @@ func (s *Simulator) handleCheckDeliveryStatus(order *models.Order) {
 	}
 
 	distance := s.calculateDistance(partner.CurrentLocation, user.Location)
-	log.Printf("Order %s: Distance to customer: %.2f km", order.ID, distance)
 
 	if distance <= deliveryThreshold {
 		// order has been delivered
