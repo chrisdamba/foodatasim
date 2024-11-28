@@ -16,6 +16,7 @@ import (
 
 const earthRadiusKm = 6371.0 // Earth's radius in kilometers
 const deliveryThreshold = 0.1
+const batchSize = 100
 
 func (s *Simulator) getUser(userID string) *models.User {
 	for i, user := range s.Users {
@@ -1217,7 +1218,14 @@ func (s *Simulator) createAndAddOrder(user *models.User) (*models.Order, error) 
 }
 
 func (s *Simulator) updateOrderStatuses() {
-	for i, order := range s.Orders {
+	for i := 0; i < len(s.Orders); i += batchSize {
+		end := min(i+batchSize, len(s.Orders))
+		s.processOrderBatch(s.Orders[i:end])
+	}
+}
+
+func (s *Simulator) processOrderBatch(orders []models.Order) {
+	for i, order := range orders {
 		switch order.Status {
 		case models.OrderStatusPlaced:
 			if s.CurrentTime.After(order.PrepStartTime) {

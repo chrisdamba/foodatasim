@@ -714,7 +714,7 @@ func (s *Simulator) handleOrderReady(order *models.Order) {
 	if order.DeliveryPartnerID != "" {
 		partner := s.getDeliveryPartner(order.DeliveryPartnerID)
 		s.EventQueue.Enqueue(&models.Event{
-			Time: s.CurrentTime, // try pickup immediately
+			Time: s.CurrentTime,
 			Type: models.EventPickUpOrder,
 			Data: order,
 		})
@@ -1020,12 +1020,15 @@ func (s *Simulator) handleDeliverOrder(order *models.Order) {
 	partner.CurrentOrderID = ""
 
 	// schedule review
-	reviewTime := s.CurrentTime.Add(30 * time.Minute)
-	s.EventQueue.Enqueue(&models.Event{
-		Time: reviewTime,
-		Type: models.EventGenerateReview,
-		Data: order,
-	})
+	if !order.ReviewGenerated {
+		reviewTime := s.CurrentTime.Add(30 * time.Minute)
+		s.EventQueue.Enqueue(&models.Event{
+			Time: reviewTime,
+			Type: models.EventGenerateReview,
+			Data: order,
+		})
+		order.ReviewGenerated = true
+	}
 
 	log.Printf("Order %s delivered to user %s at %s",
 		order.ID, user.ID, s.CurrentTime.Format(time.RFC3339))
